@@ -252,7 +252,7 @@ async function runDoctor(): Promise<void> {
     process.stdout.write(
       `hiq-editor ${VERSION}\n` +
         `server:       ${report.serverUrl}\n` +
-        `token:        ${tokenSet ? "set" : "MISSING — export HIQ_EDITOR_TOKEN"}\n` +
+        `token:        ${tokenSet ? (process.env.HIQ_EDITOR_TOKEN?.trim() ? "set (env)" : "set (login)") : "MISSING — export HIQ_EDITOR_TOKEN or run `hiq-editor login`"}\n` +
         `connectivity: ${reachable ? `ok (${toolCount} remote tools, ${latencyMs}ms)` : `FAILED${error ? ` — ${error}` : ""}`}\n` +
         `local tools:  ${report.localTools}\n`,
     );
@@ -267,7 +267,7 @@ async function runDoctor(): Promise<void> {
 
 /** Commands handled without the remote catalog. Anything else (or bare
  *  `--help`) loads the catalog and registers the per-tool subcommands. */
-const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "doctor", "version"]);
+const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "doctor", "login", "logout", "version"]);
 
 async function main(): Promise<void> {
   const rawArgs = hideBin(process.argv);
@@ -327,6 +327,32 @@ async function main(): Promise<void> {
       async () => {
         try {
           await runDoctor();
+        } catch (err) {
+          emitError(err);
+        }
+      },
+    )
+    .command(
+      "login",
+      "Sign in via QR / device flow (stores credentials for later commands).",
+      (y) => y,
+      async () => {
+        try {
+          const { runLogin } = await import("./login.js");
+          await runLogin(jsonMode);
+        } catch (err) {
+          emitError(err);
+        }
+      },
+    )
+    .command(
+      "logout",
+      "Remove stored login credentials.",
+      (y) => y,
+      async () => {
+        try {
+          const { runLogout } = await import("./login.js");
+          runLogout(jsonMode);
         } catch (err) {
           emitError(err);
         }

@@ -30,10 +30,13 @@ export interface Config {
   site: string;
 }
 
+import { readStoredToken } from "./login.js";
+
 export const config: Config = {
   serverUrl: stripTrailingSlash(
     process.env.HIQ_EDITOR_SERVER_URL?.trim() || DEFAULT_SERVER_URL,
   ),
-  token: process.env.HIQ_EDITOR_TOKEN?.trim() ?? "",
+  // Host-injected env wins; otherwise fall back to `hiq-editor login` credentials.
+  token: process.env.HIQ_EDITOR_TOKEN?.trim() || readStoredToken(),
   site: process.env.HIQ_EDITOR_SITE?.trim() || "101",
 };

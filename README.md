@@ -25,7 +25,7 @@ required flags, enums become choices, object/array props take JSON values.
 Names are the native tool names minus the `_tool` suffix, kebab-cased.
 
 ```bash
-export HIQ_EDITOR_TOKEN=<your SSO token>
+npx @hiq-ai/hiq-editor login         # QR sign-in (or: export HIQ_EDITOR_TOKEN=<SSO token>)
 
 npx @hiq-ai/hiq-editor doctor        # config + connectivity + catalog self-check
 npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
@@ -161,10 +161,21 @@ token the host supplies) — so the host config only needs the token:
 
 ## Authentication
 
-The only credential is the **SSO token**, supplied by the host through the
-`HIQ_EDITOR_TOKEN` environment variable (there is no `login` tool). The client
-forwards it verbatim as `Authorization: Bearer <token>`; the server resolves the
-user and tenant from it. The token is never written to disk or logs.
+The credential is the user's **SSO token**, obtained one of two ways
+(env wins when both are present):
+
+1. **Host-injected env** — `HIQ_EDITOR_TOKEN`, set by the host that spawns the
+   CLI/gateway (Cortex Desktop does this automatically for the signed-in user).
+2. **`hiq-editor login`** — self-serve QR sign-in for standalone use (Claude
+   Code, WorkBuddy, any agent runtime with no host injection): prints a QR +
+   authorize link (deck OAuth device flow, scope `lca_data`), you approve on
+   cortex.hiq.earth, and the credential is stored at
+   `~/.config/hiq-editor/credentials.json` (mode 600). `hiq-editor logout`
+   removes it; `doctor` shows which source is active.
+
+Either way the client forwards the token verbatim as
+`Authorization: Bearer <token>`; the server resolves the user and tenant from
+it. The token is never logged.
 
 ## Tool surface
 
