@@ -1,6 +1,6 @@
 {
   "name": "@hiq-ai/hiq-editor-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open local stdio MCP gateway for the HiQ LCA dataset editor — connects to the editor server's MCP endpoint, re-exposes its tools, and adds local UPR-template / file tools.",
   "license": "Apache-2.0",
   "type": "module",

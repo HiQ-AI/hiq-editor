@@ -3,10 +3,13 @@
  * Subprocess-friendly CLI for the editor MCP gateway. What
  * `npx -y @hiq-ai/hiq-editor <subcommand>` runs.
  *
- * Generic, gateway-style — it does not declare per-tool subcommands. Instead:
+ * Per-tool subcommands are generated at runtime from the gateway's tool
+ * catalog (dynamicCommands.ts) — `hiq-editor add-exchange --process-id … --value …`
+ * with flags derived from each tool's input JSON Schema, no schema duplication.
+ * Static commands:
  *   - `list [--json]`     — list the tools the gateway exposes (remote + local).
  *   - `describe <tool>`   — print a tool's description + input JSON Schema.
- *   - `call <tool> --args '<json>'` — invoke any tool by name with a JSON args object.
+ *   - `call <tool> --args '<json>'` — raw escape hatch: invoke by native name with a JSON args object.
  *   - `import <plan.json>` — orchestrated whole-UPR import with checkpoint/resume
  *                            (see importPlan.ts for the plan format).
  *   - `version`           — print version.
@@ -22,6 +25,7 @@ import { readFileSync } from "node:fs";
 import { localToolDefs } from "./tools/index.js";
 import { listRemoteTools, callRemoteTool } from "./serverClient.js";
 import { runImport } from "./importPlan.js";
+import { registerToolCommands, toolAlias, type CatalogTool } from "./dynamicCommands.js";
 import { EditorClientError } from "./types.js";
 
 const VERSION = (
@@ -70,57 +74,65 @@ function contentToText(result: unknown): string {
     .join("\n");
 }
 
-async function runList(json: boolean): Promise<void> {
-  let remote: Awaited<ReturnType<typeof listRemoteTools>> = [];
+/** The gateway catalog: remote tools (when reachable/authed) + local tools. */
+async function loadCatalog(warn: boolean): Promise<CatalogTool[]> {
+  let remote: CatalogTool[] = [];
   try {
-    remote = await listRemoteTools();
+    remote = (await listRemoteTools()).map((t) => ({
+      name: t.name,
+      description: t.description ?? "",
+      inputSchema: t.inputSchema,
+      local: false,
+    }));
   } catch (err) {
-    process.stderr.write(`(remote tools unavailable: ${err instanceof Error ? err.message : String(err)})\n`);
+    if (warn) {
+      process.stderr.write(
+        `(remote tools unavailable: ${err instanceof Error ? err.message : String(err)})\n`,
+      );
+    }
   }
+  return [
+    ...remote,
+    ...localToolDefs.map((t) => ({
+      name: t.name,
+      // Their descriptions carry a "LOCAL." prefix for the MCP tool list; the
+      // catalog marks locality via the `local` flag instead.
+      description: t.description.replace(/^LOCAL\.\s*/, ""),
+      inputSchema: t.inputSchema as unknown,
+      local: true,
+    })),
+  ];
+}
+
+async function runList(json: boolean): Promise<void> {
+  const catalog = await loadCatalog(true);
   if (json) {
-    const all = [
-      ...remote.map((t) => ({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema, local: false })),
-      ...localToolDefs.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, local: true })),
-    ];
-    process.stdout.write(JSON.stringify(all, null, 2) + "\n");
+    process.stdout.write(JSON.stringify(catalog, null, 2) + "\n");
     return;
   }
-  const lines: string[] = [];
-  for (const t of remote) {
-    lines.push(`${t.name}\t${t.description ?? ""}`);
-  }
-  for (const t of localToolDefs) {
-    lines.push(`${t.name}\t(local) ${t.description}`);
-  }
+  const lines = catalog.map((t) => {
+    const alias = toolAlias(t.name);
+    const native = alias === t.name ? "" : `  (${t.name})`;
+    return `${alias}${native}\t${t.local ? "(local) " : ""}${t.description ?? ""}`;
+  });
   process.stdout.write(lines.join("\n") + "\n");
 }
 
 async function runDescribe(tool: string): Promise<void> {
-  const local = localByName.get(tool);
-  if (local) {
-    process.stdout.write(
-      `${local.name} (local)\n${local.description}\n\nInput schema:\n${JSON.stringify(local.inputSchema, null, 2)}\n`,
-    );
-    return;
-  }
-  const remote = await listRemoteTools();
-  const t = remote.find((r) => r.name === tool);
+  const catalog = await loadCatalog(true);
+  const t = catalog.find((r) => r.name === tool || toolAlias(r.name) === tool);
   if (!t) {
     throw new EditorClientError("validation", `Unknown tool '${tool}'. Run \`hiq-editor list\` to see available tools.`);
   }
   process.stdout.write(
-    `${t.name}\n${t.description ?? ""}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}\n`,
+    `${toolAlias(t.name)}${toolAlias(t.name) === t.name ? "" : ` (native: ${t.name})`}${t.local ? " (local)" : ""}\n` +
+      `${t.description ?? ""}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}\n`,
   );
 }
 
-async function runCall(tool: string, argsJson: string): Promise<void> {
-  let args: Record<string, unknown>;
-  try {
-    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
-  } catch (e) {
-    throw new EditorClientError("validation", `--args must be valid JSON: ${String(e)}`);
-  }
-
+/** Invoke a tool (local first, then remote) and print its text result. Shared
+ *  by the raw `call` command and the generated per-tool subcommands. */
+async function invokeByName(tool: string, args: Record<string, unknown>): Promise<void> {
   const local = localByName.get(tool);
   if (local) {
     const content = await local.handler(args);
@@ -135,8 +147,26 @@ async function runCall(tool: string, argsJson: string): Promise<void> {
   process.stdout.write(contentToText(result) + "\n");
 }
 
+async function runCall(tool: string, argsJson: string): Promise<void> {
+  let args: Record<string, unknown>;
+  try {
+    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
+  } catch (e) {
+    throw new EditorClientError("validation", `--args must be valid JSON: ${String(e)}`);
+  }
+  await invokeByName(tool, args);
+}
+
+/** Commands handled without the remote catalog. Anything else (or bare
+ *  `--help`) loads the catalog and registers the per-tool subcommands. */
+const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "version", "completion"]);
+
 async function main(): Promise<void> {
-  await yargs(hideBin(process.argv))
+  const rawArgs = hideBin(process.argv);
+  const first = rawArgs.find((a) => !a.startsWith("-"));
+  const needDynamic = !first || !STATIC_COMMANDS.has(first);
+
+  let y = yargs(rawArgs)
     .scriptName("hiq-editor")
     .strict()
     .help()
@@ -242,8 +272,12 @@ async function main(): Promise<void> {
       () => {
         process.stdout.write(VERSION + "\n");
       },
-    )
-    .parseAsync();
+    );
+
+  if (needDynamic) {
+    y = registerToolCommands(y, await loadCatalog(true), invokeByName, emitError) as typeof y;
+  }
+  await y.parseAsync();
 }
 
 main().catch((err) => emitError(err));

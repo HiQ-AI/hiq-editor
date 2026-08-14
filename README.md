@@ -127,28 +127,30 @@ Both local tools require **absolute** file paths.
 
 ## CLI
 
-A generic gateway CLI makes the same tools scriptable from a shell:
-
-The CLI binary is `hiq-editor` (shipped by the `@hiq-ai/hiq-editor-mcp`
-package — select it with `npx -p`):
+The `hiq-editor` binary (shipped by this package — select it with `npx -p`)
+turns every gateway tool into a real subcommand. Subcommands and their flags
+are generated at runtime from the server's tool catalog (input JSON Schema →
+options), so there is no client-side schema copy to drift: required props are
+required flags, enums become choices, object/array props take JSON values.
+Names are the native tool names minus the `_tool` suffix, kebab-cased.
 
 ```bash
 export HIQ_EDITOR_TOKEN=<your SSO token>
 
-# List the tools the gateway exposes (remote + local).
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor list
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor list          # tool catalog (--json for schemas)
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor describe add-exchange
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor add-exchange --help   # per-command flags
 
-# Print a tool's description + input JSON Schema (know the args before calling).
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor describe add_exchange_tool
-
-# Invoke any tool by name, passing args as a JSON object.
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor call list_datasources
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor call get_process_detail_tool --args '{"process_id":"12345"}'
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor call parse_upr_template --args '{"file_path":"/abs/path/UPR.xlsx"}'
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor get-process-detail --process-id 12345
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor add-exchange --process-id 12345 \
+  --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
+  --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
 ```
 
-`--args` defaults to `{}`. Tool names are the server's native (snake_case) names.
-`list --json` emits the full catalog with input schemas, machine-readable.
+The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
+(`--args` defaults to `{}`).
 
 ### `import` — whole-UPR batch import
 
