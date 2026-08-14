@@ -13,8 +13,13 @@
  * tools are already JSON-schema, so the two local tools match that shape.
  */
 
-import * as XLSX from "xlsx";
-import { callRemoteTool } from "../serverClient.js";
+import type * as XLSXNS from "xlsx";
+
+// Heavy deps are lazy-loaded inside handlers so `hiq-editor version`/`--help`
+// and non-file commands don't pay their startup cost (xlsx alone is ~1MB).
+async function loadXlsx(): Promise<typeof XLSXNS> {
+  return import("xlsx");
+}
 import { readBytes, writeText, requireAbsolute } from "../files.js";
 
 /** A JSON-Schema object describing a tool's arguments. */
@@ -51,11 +56,8 @@ interface BasicInfoField {
   note?: string;
 }
 
-function readWorkbook(bytes: Buffer): XLSX.WorkBook {
-  return XLSX.read(bytes, { type: "buffer" });
-}
 
-function sheetRows(wb: XLSX.WorkBook, name: string): unknown[][] {
+function sheetRows(XLSX: typeof XLSXNS, wb: XLSXNS.WorkBook, name: string): unknown[][] {
   const ws = wb.Sheets[name];
   if (!ws) return [];
   return XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
@@ -65,8 +67,8 @@ function cell(v: unknown): string {
   return v == null ? "" : String(v).trim();
 }
 
-function parseBasicInfo(wb: XLSX.WorkBook): BasicInfoField[] {
-  const rows = sheetRows(wb, BASIC_INFO_SHEET);
+function parseBasicInfo(XLSX: typeof XLSXNS, wb: XLSXNS.WorkBook): BasicInfoField[] {
+  const rows = sheetRows(XLSX, wb, BASIC_INFO_SHEET);
   const out: BasicInfoField[] = [];
   // Row 0 is the header (字段名/值/备注/是否必填). Data starts at row 1.
   for (let i = 1; i < rows.length; i++) {
@@ -82,12 +84,12 @@ function parseBasicInfo(wb: XLSX.WorkBook): BasicInfoField[] {
 }
 
 /** Map a data-item sheet into { headers, rows } where rows are header→value objects. */
-function parseDataItems(wb: XLSX.WorkBook, name: string): {
+function parseDataItems(XLSX: typeof XLSXNS, wb: XLSXNS.WorkBook, name: string): {
   sheet: string;
   headers: string[];
   rows: Record<string, string>[];
 } {
-  const raw = sheetRows(wb, name);
+  const raw = sheetRows(XLSX, wb, name);
   if (raw.length === 0) return { sheet: name, headers: [], rows: [] };
   const headers = (raw[0] ?? []).map(cell);
   const rows: Record<string, string>[] = [];
@@ -142,11 +144,12 @@ export const parseUprTemplate: LocalToolDef = {
   handler: async (args) => {
     const filePath = requireAbsolute("file_path", String(args.file_path ?? ""));
     const bytes = await readBytes(filePath);
-    const wb = readWorkbook(bytes);
+    const XLSX = await loadXlsx();
+    const wb = XLSX.read(bytes, { type: "buffer" });
 
-    const basicInfo = parseBasicInfo(wb);
+    const basicInfo = parseBasicInfo(XLSX, wb);
     const dataItemSheets = DATA_ITEM_SHEETS.filter((s) => wb.SheetNames.includes(s)).map(
-      (s) => parseDataItems(wb, s),
+      (s) => parseDataItems(XLSX, wb, s),
     );
 
     const summary = {
@@ -180,6 +183,7 @@ export const exportProcess: LocalToolDef = {
   handler: async (args) => {
     const processId = String(args.process_id ?? "");
     const outPath = requireAbsolute("out_path", String(args.out_path ?? ""));
+    const { callRemoteTool } = await import("../serverClient.js");
     const result = await callRemoteTool("get_process_detail_tool", {
       process_id: processId,
     });

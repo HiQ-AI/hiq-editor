@@ -25,7 +25,6 @@
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
-import { callRemoteTool } from "./serverClient.js";
 import { EditorClientError } from "./types.js";
 
 export interface ImportPlan {
@@ -46,12 +45,16 @@ interface ImportState {
 }
 
 export interface ImportOptions {
+  /** Read the plan JSON from stdin instead of a file path. */
+  stdin?: boolean;
   statePath?: string;
   /** Attach to an existing process instead of creating one (e.g. after a
    *  name-already-exists create failure). */
   processId?: string;
   calc?: boolean;
   dryRun?: boolean;
+  /** Machine-readable output: JSON step list (--dry-run) / final summary. */
+  json?: boolean;
 }
 
 const BACKGROUND_TUPLE_FIELDS = [
@@ -129,6 +132,7 @@ function validatePlan(plan: ImportPlan): string[] {
 
 /** Call a remote tool; a tool-level error becomes a thrown upstream error. */
 async function invoke(tool: string, args: Record<string, unknown>): Promise<string> {
+  const { callRemoteTool } = await import("./serverClient.js");
   const result = await callRemoteTool(tool, args);
   const raw = (result as { content?: unknown }).content;
   const text = (Array.isArray(raw) ? raw : [])
@@ -163,12 +167,24 @@ function loadState(statePath: string, processName: string): ImportState {
 export async function runImport(planPath: string, opts: ImportOptions): Promise<void> {
   const log = (msg: string) => process.stderr.write(msg + "\n");
 
-  const rawPlan = readFileSync(planPath, "utf-8");
+  // `import --stdin` reads the plan from stdin (then --state is required to
+  // resume, since there is no plan path to derive the default state path from).
+  const fromStdin = Boolean(opts.stdin);
+  if (!fromStdin && !planPath) {
+    throw new EditorClientError("validation", "pass a plan file path, or --stdin to read the plan from stdin.");
+  }
+  const rawPlan = readFileSync(fromStdin ? 0 : planPath, "utf-8");
   let plan: ImportPlan;
   try {
     plan = JSON.parse(rawPlan) as ImportPlan;
   } catch (e) {
-    throw new EditorClientError("validation", `${planPath} is not valid JSON: ${String(e)}`);
+    throw new EditorClientError("validation", `${fromStdin ? "stdin" : planPath} is not valid JSON: ${String(e)}`);
+  }
+  if (fromStdin && !opts.dryRun && !opts.statePath) {
+    throw new EditorClientError(
+      "validation",
+      "reading the plan from stdin requires --state <path> (checkpoint/resume needs a stable state file).",
+    );
   }
   const errors = validatePlan(plan);
   if (errors.length > 0) {
@@ -184,15 +200,21 @@ export async function runImport(planPath: string, opts: ImportOptions): Promise<
     1 + (plan.reference_product ? 1 : 0) + exchanges.length + (doCalc ? 1 : 0);
 
   if (opts.dryRun) {
-    log(`Plan OK — ${steps} step(s):`);
-    log(`  create_process: ${String(plan.process.name)}`);
+    const stepList: string[] = [`create_process: ${String(plan.process.name)}`];
     if (plan.reference_product) {
-      log(`  reference product: value=${String(plan.reference_product.value)}`);
+      stepList.push(`reference product: value=${String(plan.reference_product.value)}`);
     }
     exchanges.forEach((ex, i) =>
-      log(`  exchange ${i + 1}/${exchanges.length}: ${String(ex.category)} ${String(ex.material_name ?? ex.flow_id ?? (ex.background as Record<string, unknown> | undefined)?.up_element_name ?? "")}`),
+      stepList.push(
+        `exchange ${i + 1}/${exchanges.length}: ${String(ex.category)} ${String(ex.material_name ?? ex.flow_id ?? (ex.background as Record<string, unknown> | undefined)?.up_element_name ?? "")}`,
+      ),
     );
-    if (doCalc) log("  trial calculation");
+    if (doCalc) stepList.push("trial calculation");
+    process.stdout.write(
+      opts.json
+        ? JSON.stringify({ ok: true, dryRun: true, steps: stepList }) + "\n"
+        : `Plan OK — ${steps} step(s):\n` + stepList.map((s) => `  ${s}`).join("\n") + "\n",
+    );
     return;
   }
 
@@ -297,10 +319,19 @@ export async function runImport(planPath: string, opts: ImportOptions): Promise<
     unlinkSync(statePath);
   }
   process.stdout.write(
-    `Import complete.\nProcess: ${processId}\n` +
-      `Reference product: ${plan.reference_product ? "written" : "from create_process"}\n` +
-      `Exchanges: ${exchanges.length}` +
-      calcNote +
-      "\n",
+    opts.json
+      ? JSON.stringify({
+          ok: true,
+          processId,
+          processName: String(plan.process.name),
+          referenceProduct: Boolean(plan.reference_product),
+          exchanges: exchanges.length,
+          calculated: doCalc,
+        }) + "\n"
+      : `Import complete.\nProcess: ${processId}\n` +
+          `Reference product: ${plan.reference_product ? "written" : "from create_process"}\n` +
+          `Exchanges: ${exchanges.length}` +
+          calcNote +
+          "\n",
   );
 }

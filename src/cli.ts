@@ -20,14 +20,23 @@ import yargs from "yargs";
 import type { ArgumentsCamelCase } from "yargs";
 import { hideBin } from "yargs/helpers";
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { localToolDefs } from "./tools/index.js";
-import { listRemoteTools, callRemoteTool } from "./serverClient.js";
+import { config } from "./config.js";
 import { runImport } from "./importPlan.js";
 import { registerToolCommands, toolAlias, type CatalogTool } from "./dynamicCommands.js";
 import { EditorClientError } from "./types.js";
 import { VERSION } from "./version.js";
 
 const localByName = new Map(localToolDefs.map((t) => [t.name, t]));
+
+/** Global --json mode: machine-readable output on stdout, structured errors on
+ *  stderr. Set once by yargs middleware before any handler runs. */
+let jsonMode = false;
 
 function exitCodeFor(err: unknown): number {
   if (err instanceof EditorClientError) {
@@ -44,11 +53,19 @@ function exitCodeFor(err: unknown): number {
 
 function emitError(err: unknown): void {
   const code = exitCodeFor(err);
-  const text =
-    err instanceof EditorClientError
-      ? `[${err.kind}${err.code ? `:${err.code}` : ""}] ${err.message}`
-      : `[unknown] ${err instanceof Error ? err.message : String(err)}`;
-  process.stderr.write(text + "\n");
+  if (jsonMode) {
+    const obj =
+      err instanceof EditorClientError
+        ? { ok: false, kind: err.kind, code: err.code ?? null, message: err.message }
+        : { ok: false, kind: "unknown", code: null, message: err instanceof Error ? err.message : String(err) };
+    process.stderr.write(JSON.stringify(obj) + "\n");
+  } else {
+    const text =
+      err instanceof EditorClientError
+        ? `[${err.kind}${err.code ? `:${err.code}` : ""}] ${err.message}`
+        : `[unknown] ${err instanceof Error ? err.message : String(err)}`;
+    process.stderr.write(text + "\n");
+  }
   process.exit(code);
 }
 
@@ -67,21 +84,62 @@ function contentToText(result: unknown): string {
     .join("\n");
 }
 
-/** The gateway catalog: remote tools (when reachable/authed) + local tools. */
-async function loadCatalog(warn: boolean): Promise<CatalogTool[]> {
-  let remote: CatalogTool[] = [];
+/** Disk cache for the remote tool catalog — dynamic subcommand registration
+ *  reads it to skip a tools/list round trip per invocation (the tool call
+ *  itself still goes live; the server re-validates args regardless). `list`,
+ *  `describe`, and `doctor` always fetch live and refresh the cache. */
+const CATALOG_CACHE_TTL_MS = 15 * 60 * 1000;
+
+function catalogCachePath(): string {
+  const key = createHash("sha1").update(config.serverUrl).digest("hex").slice(0, 12);
+  return join(homedir(), ".cache", "hiq-editor", `catalog-${key}.json`);
+}
+
+function readCatalogCache(): CatalogTool[] | null {
   try {
-    remote = (await listRemoteTools()).map((t) => ({
-      name: t.name,
-      description: t.description ?? "",
-      inputSchema: t.inputSchema,
-      local: false,
-    }));
-  } catch (err) {
-    if (warn) {
-      process.stderr.write(
-        `(remote tools unavailable: ${err instanceof Error ? err.message : String(err)})\n`,
-      );
+    const raw = JSON.parse(readFileSync(catalogCachePath(), "utf-8")) as {
+      fetchedAt: number;
+      tools: CatalogTool[];
+    };
+    if (Date.now() - raw.fetchedAt > CATALOG_CACHE_TTL_MS) return null;
+    return Array.isArray(raw.tools) ? raw.tools : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCatalogCache(tools: CatalogTool[]): void {
+  try {
+    const p = catalogCachePath();
+    mkdirSync(join(homedir(), ".cache", "hiq-editor"), { recursive: true });
+    writeFileSync(p, JSON.stringify({ fetchedAt: Date.now(), tools }));
+  } catch {
+    // best-effort — a failed cache write never fails the command
+  }
+}
+
+/** The gateway catalog: remote tools (when reachable/authed) + local tools. */
+async function loadCatalog(warn: boolean, useCache = false): Promise<CatalogTool[]> {
+  let remote: CatalogTool[] = [];
+  const cached = useCache ? readCatalogCache() : null;
+  if (cached) {
+    remote = cached;
+  } else {
+    try {
+      const { listRemoteTools } = await import("./serverClient.js");
+      remote = (await listRemoteTools()).map((t) => ({
+        name: t.name,
+        description: t.description ?? "",
+        inputSchema: t.inputSchema,
+        local: false,
+      }));
+      writeCatalogCache(remote);
+    } catch (err) {
+      if (warn) {
+        process.stderr.write(
+          `(remote tools unavailable: ${err instanceof Error ? err.message : String(err)})\n`,
+        );
+      }
     }
   }
   return [
@@ -127,32 +185,84 @@ async function runDescribe(tool: string): Promise<void> {
  *  by the raw `call` command and the generated per-tool subcommands. */
 async function invokeByName(tool: string, args: Record<string, unknown>): Promise<void> {
   const local = localByName.get(tool);
+  let text: string;
   if (local) {
-    const content = await local.handler(args);
-    process.stdout.write(contentToText({ content }) + "\n");
-    return;
+    text = contentToText({ content: await local.handler(args) });
+  } else {
+    const { callRemoteTool } = await import("./serverClient.js");
+    const result = await callRemoteTool(tool, args);
+    if ((result as { isError?: boolean }).isError) {
+      throw new EditorClientError("upstream", contentToText(result));
+    }
+    text = contentToText(result);
   }
-
-  const result = await callRemoteTool(tool, args);
-  if ((result as { isError?: boolean }).isError) {
-    throw new EditorClientError("upstream", contentToText(result));
-  }
-  process.stdout.write(contentToText(result) + "\n");
+  process.stdout.write(
+    jsonMode ? JSON.stringify({ ok: true, tool, text }) + "\n" : text + "\n",
+  );
 }
 
-async function runCall(tool: string, argsJson: string): Promise<void> {
+async function runCall(tool: string, argsJson: string, fromStdin: boolean): Promise<void> {
+  const raw = fromStdin ? readFileSync(0, "utf-8") : argsJson;
   let args: Record<string, unknown>;
   try {
-    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
+    args = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   } catch (e) {
-    throw new EditorClientError("validation", `--args must be valid JSON: ${String(e)}`);
+    throw new EditorClientError("validation", `${fromStdin ? "stdin" : "--args"} must be valid JSON: ${String(e)}`);
   }
   await invokeByName(tool, args);
 }
 
+/** `doctor` — diagnose config, connectivity, and the tool catalog in one shot. */
+async function runDoctor(): Promise<void> {
+  const tokenSet = Boolean(config.token);
+  let reachable = false;
+  let toolCount = 0;
+  let latencyMs = 0;
+  let error: string | null = null;
+  if (tokenSet) {
+    const t0 = Date.now();
+    try {
+      const { listRemoteTools } = await import("./serverClient.js");
+      toolCount = (await listRemoteTools()).length;
+      latencyMs = Date.now() - t0;
+      reachable = true;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  const report = {
+    ok: tokenSet && reachable,
+    version: VERSION,
+    serverUrl: config.serverUrl,
+    tokenSet,
+    reachable,
+    remoteTools: toolCount,
+    localTools: localToolDefs.length,
+    latencyMs,
+    error,
+  };
+  if (jsonMode) {
+    process.stdout.write(JSON.stringify(report) + "\n");
+  } else {
+    process.stdout.write(
+      `hiq-editor ${VERSION}\n` +
+        `server:       ${report.serverUrl}\n` +
+        `token:        ${tokenSet ? "set" : "MISSING — export HIQ_EDITOR_TOKEN"}\n` +
+        `connectivity: ${reachable ? `ok (${toolCount} remote tools, ${latencyMs}ms)` : `FAILED${error ? ` — ${error}` : ""}`}\n` +
+        `local tools:  ${report.localTools}\n`,
+    );
+  }
+  if (!tokenSet) {
+    process.exit(2);
+  }
+  if (!reachable) {
+    process.exit(5);
+  }
+}
+
 /** Commands handled without the remote catalog. Anything else (or bare
  *  `--help`) loads the catalog and registers the per-tool subcommands. */
-const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "version", "completion"]);
+const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "doctor", "version"]);
 
 async function main(): Promise<void> {
   const rawArgs = hideBin(process.argv);
@@ -164,19 +274,54 @@ async function main(): Promise<void> {
     .strict()
     .help()
     .alias("h", "help")
+    .version(VERSION)
+    .recommendCommands()
+    .option("json", {
+      type: "boolean",
+      global: true,
+      default: false,
+      describe: "Machine-readable output: JSON on stdout, structured errors on stderr.",
+    })
+    .middleware((argv) => {
+      jsonMode = Boolean(argv.json);
+    }, true)
+    .fail((msg, err, yi) => {
+      // Route yargs usage errors through the same structured error channel.
+      // demandCommand with an empty message (bare `hiq-editor`) lands here with
+      // neither msg nor err — show help instead of an empty error.
+      if (err || msg) {
+        emitError(err ?? new EditorClientError("validation", msg));
+      }
+      yi.showHelp();
+      process.exit(1);
+    })
+    .epilogue(
+      "Environment:\n" +
+        "  HIQ_EDITOR_TOKEN       SSO token (required; env only — never a flag)\n" +
+        "  HIQ_EDITOR_SERVER_URL  MCP endpoint (default: https://x.hiqlcd.com/mcp/editor)\n\n" +
+        "Exit codes: 0 ok · 2 config · 3 validation · 4 upstream · 5 transport · 1 unknown\n" +
+        "Docs: https://github.com/HiQ-AI/hiq-editor#readme",
+    )
     .demandCommand(1, "")
     .command(
       "list",
-      "List the tools the gateway exposes (remote + local).",
-      (y) =>
-        y.option("json", {
-          type: "boolean",
-          describe: "Emit a JSON array with each tool's input schema.",
-          default: false,
-        }),
+      "List the tools the gateway exposes (remote + local). --json adds input schemas.",
+      (y) => y,
       async (argv: ArgumentsCamelCase<{ json?: boolean }>) => {
         try {
           await runList(Boolean(argv.json));
+        } catch (err) {
+          emitError(err);
+        }
+      },
+    )
+    .command(
+      "doctor",
+      "Diagnose config, server connectivity, and the tool catalog.",
+      (y) => y,
+      async () => {
+        try {
+          await runDoctor();
         } catch (err) {
           emitError(err);
         }
@@ -195,11 +340,16 @@ async function main(): Promise<void> {
       },
     )
     .command(
-      "import <plan>",
+      "import [plan]",
       "Import a whole UPR from a plan JSON (create process → reference product → exchanges → optional trial calc), with checkpoint/resume.",
       (y) =>
         y
-          .positional("plan", { type: "string", describe: "Path to the plan JSON file." })
+          .positional("plan", { type: "string", describe: "Path to the plan JSON file (or pass --stdin)." })
+          .option("stdin", {
+            type: "boolean",
+            default: false,
+            describe: "Read the plan JSON from stdin (--state is then required to resume).",
+          })
           .option("state", {
             type: "string",
             describe: "Checkpoint file path (default: <plan>.state.json).",
@@ -221,6 +371,7 @@ async function main(): Promise<void> {
       async (
         argv: ArgumentsCamelCase<{
           plan?: string;
+          stdin?: boolean;
           state?: string;
           processId?: string;
           calc?: boolean;
@@ -229,10 +380,12 @@ async function main(): Promise<void> {
       ) => {
         try {
           await runImport(String(argv.plan ?? ""), {
+            stdin: Boolean(argv.stdin),
             statePath: argv.state,
             processId: argv.processId,
             calc: Boolean(argv.calc),
             dryRun: Boolean(argv.dryRun),
+            json: jsonMode,
           });
         } catch (err) {
           emitError(err);
@@ -249,10 +402,15 @@ async function main(): Promise<void> {
             type: "string",
             describe: "JSON-encoded args object, e.g. '{\"datasource\":\"GBA\"}'.",
             default: "{}",
+          })
+          .option("stdin", {
+            type: "boolean",
+            default: false,
+            describe: "Read the JSON args object from stdin instead of --args.",
           }),
-      async (argv: ArgumentsCamelCase<{ tool?: string; args?: string }>) => {
+      async (argv: ArgumentsCamelCase<{ tool?: string; args?: string; stdin?: boolean }>) => {
         try {
-          await runCall(String(argv.tool ?? ""), String(argv.args ?? "{}"));
+          await runCall(String(argv.tool ?? ""), String(argv.args ?? "{}"), Boolean(argv.stdin));
         } catch (err) {
           emitError(err);
         }
@@ -268,7 +426,7 @@ async function main(): Promise<void> {
     );
 
   if (needDynamic) {
-    y = registerToolCommands(y, await loadCatalog(true), invokeByName, emitError) as typeof y;
+    y = registerToolCommands(y, await loadCatalog(true, true), invokeByName, emitError) as typeof y;
   }
   await y.parseAsync();
 }

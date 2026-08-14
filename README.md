@@ -27,6 +27,7 @@ Names are the native tool names minus the `_tool` suffix, kebab-cased.
 ```bash
 export HIQ_EDITOR_TOKEN=<your SSO token>
 
+npx @hiq-ai/hiq-editor doctor        # config + connectivity + catalog self-check
 npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
 npx @hiq-ai/hiq-editor describe add-exchange
 npx @hiq-ai/hiq-editor add-exchange --help   # per-command flags
@@ -40,7 +41,19 @@ npx @hiq-ai/hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
 ```
 
 The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
-(`--args` defaults to `{}`).
+(`--args` defaults to `{}`; `--stdin` reads the args object from stdin).
+
+Agent/script ergonomics:
+
+- **`--json`** (global) — machine-readable output: results as
+  `{"ok":true,"tool":…,"text":…}` on stdout, errors as
+  `{"ok":false,"kind":…,"message":…}` on stderr. Human text is the default.
+- **`--stdin`** — `call --stdin` and `import --stdin` read their JSON payload
+  from stdin (pipe-friendly; `import --stdin` requires `--state`).
+- **Catalog cache** — subcommand registration uses a 15-minute disk cache of
+  the server's tool catalog (`~/.cache/hiq-editor/`), skipping a round trip per
+  invocation; `list` / `describe` / `doctor` always fetch live and refresh it.
+  The server re-validates every call regardless.
 
 Exit codes: `0` ok · `2` config (e.g. missing token) · `3` validation (bad
 args / plan) · `4` upstream (server rejected the operation) · `5` transport
