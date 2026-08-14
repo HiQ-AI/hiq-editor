@@ -186,6 +186,7 @@ async function runDescribe(tool: string): Promise<void> {
 async function invokeByName(tool: string, args: Record<string, unknown>): Promise<void> {
   const local = localByName.get(tool);
   let text: string;
+  let data: unknown;
   if (local) {
     text = contentToText({ content: await local.handler(args) });
   } else {
@@ -195,9 +196,13 @@ async function invokeByName(tool: string, args: Record<string, unknown>): Promis
       throw new EditorClientError("upstream", contentToText(result));
     }
     text = contentToText(result);
+    // Servers that emit MCP structuredContent give --json real data, not prose.
+    data = (result as { structuredContent?: unknown }).structuredContent;
   }
   process.stdout.write(
-    jsonMode ? JSON.stringify({ ok: true, tool, text }) + "\n" : text + "\n",
+    jsonMode
+      ? JSON.stringify({ ok: true, tool, text, ...(data !== undefined ? { data } : {}) }) + "\n"
+      : text + "\n",
   );
 }
 

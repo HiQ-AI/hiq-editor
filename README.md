@@ -48,6 +48,8 @@ Agent/script ergonomics:
 - **`--json`** (global) — machine-readable output: results as
   `{"ok":true,"tool":…,"text":…}` on stdout, errors as
   `{"ok":false,"kind":…,"message":…}` on stderr. Human text is the default.
+  Tools whose server results carry MCP `structuredContent` (the search/list
+  reads) add a `data` field with the actual rows — parse that, not the prose.
 - **`--stdin`** — `call --stdin` and `import --stdin` read their JSON payload
   from stdin (pipe-friendly; `import --stdin` requires `--state`).
 - **Catalog cache** — subcommand registration uses a 15-minute disk cache of
