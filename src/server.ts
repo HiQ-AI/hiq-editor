@@ -6,7 +6,7 @@
  * Streamable-HTTP MCP endpoint (HIQ_EDITOR_SERVER_URL, e.g.
  * https://x.hiqlcd.com/mcp/editor) as an MCP client and dynamically re-exposes
  * the server's tools over stdio, plus 2 local filesystem tools
- * (parse_upr_template, export_process). The host (Cortex Desktop / Claude Code)
+ * (import_upr_from_file, export_process). The host (Cortex Desktop / Claude Code)
  * spawns this and supplies HIQ_EDITOR_SERVER_URL + HIQ_EDITOR_TOKEN in the env.
  *
  * Uses the LOW-LEVEL Server with two request handlers so remote tool schemas

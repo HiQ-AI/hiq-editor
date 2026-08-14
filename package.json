@@ -1,6 +1,6 @@
 {
   "name": "@hiq-ai/hiq-editor",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "HiQ LCA dataset editor client — the `hiq-editor` CLI (schema-driven subcommands + whole-UPR `import` with checkpoint/resume) and a stdio MCP gateway (`hiq-editor-mcp`) that re-exposes the editor server's tools, plus local UPR-template / file tools.",
   "license": "Apache-2.0",
   "type": "module",
@@ -33,7 +33,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "qrcode-terminal": "^0.12.0",
-    "xlsx": "^0.18.5",
     "yargs": "^18.0.0"
   },
   "devDependencies": {

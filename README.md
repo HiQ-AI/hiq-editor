@@ -8,8 +8,8 @@ faces:
   plus `import` for whole-UPR batch entry with checkpoint/resume.
 - **stdio MCP gateway** (bin `hiq-editor-mcp`, module `@hiq-ai/hiq-editor/mcp`) —
   spawned by MCP hosts (Cortex Desktop, Claude Code, …); dynamically re-exposes
-  the editor server's tools over stdio and adds local file tools (UPR `.xlsx`
-  parsing, process export).
+  the editor server's tools over stdio and adds local file tools (whole-workbook
+  UPR import, process export).
 
 Apache-2.0. The proprietary parts (database schema, SQL, write/business logic,
 SSO internals) live in a separate closed server; this client only knows the
@@ -37,7 +37,7 @@ npx @hiq-ai/hiq-editor get-process-detail --process-id 12345
 npx @hiq-ai/hiq-editor add-exchange --process-id 12345 \
   --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
   --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
-npx @hiq-ai/hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
+npx @hiq-ai/hiq-editor import-upr-from-file --file-path /abs/path/UPR.xlsx --datasource GBA
 ```
 
 The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
@@ -101,7 +101,7 @@ resolved tuple in the plan; empty or partial tuples are rejected up front.
 │  @hiq-ai/hiq-editor  (this, open)    │  + SSO   │  editor server  (closed)   │
 │  • stdio MCP server (gateway)         │ ───────> │  • /mcp/editor             │
 │  • re-exposes remote tools 1:1        │  token   │    (Streamable HTTP MCP)   │
-│  • LOCAL: parse_upr_template,         │ <─────── │  • SQL reads + writes + SSO│
+│  • LOCAL: import_upr_from_file,       │ <─────── │  • SQL reads + writes + SSO│
 │           export_process              │  result  │                            │
 └──────────────────────────────────────┘          └────────────────────────────┘
 ```
@@ -124,7 +124,7 @@ this gateway** — pick based on whether you need local file tools.
 
 Any host that supports remote (Streamable HTTP) MCP can connect to the endpoint
 directly with a HiQ-issued **API key**. Zero install, but you get only the
-server's business tools — **not** the local file tools (`parse_upr_template` /
+server's business tools — **not** the local file tools (`import_upr_from_file` /
 `export_process`), which need a process on your machine.
 
 ```bash
@@ -214,7 +214,7 @@ Writes:
 
 | Tool | What it does |
 |---|---|
-| `parse_upr_template` | Read a local UPR `.xlsx`, extract 基本信息 fields + data-item rows to drive `create_process_tool` + `add_exchange_tool`. |
+| `import_upr_from_file` | Import a filled official UPR `.xlsx` template in one transactional call — creates the dataset (or appends 工序 sheets), reference product included. |
 | `export_process` | Fetch a process's detail and write it to a local file. |
 
 Both local tools require **absolute** file paths.

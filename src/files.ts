@@ -1,5 +1,5 @@
 /**
- * Local filesystem helpers for the local-only tools (parse_upr_template,
+ * Local filesystem helpers for the local-only tools (import_upr_from_file,
  * export_process). This client always runs over stdio on a host with a real
  * filesystem, so paths are read/written directly — no base64 transport like
  * jimu-lca's Worker needs.
