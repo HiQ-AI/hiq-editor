@@ -50,9 +50,13 @@ async function postJson(url: string, body: unknown): Promise<Response> {
 
 export async function runLogin(json: boolean): Promise<void> {
   const resp = await postJson(`${OAUTH_BASE}/device_authorization`, {
+    // agent_id 是稳定机器标识;授权页对已知 id 显示本地化名(HiQ 数据集编辑器 CLI /
+    // HiQ Editor CLI),agent_name 只是未收录时的回落。
     agent_id: "hiq-editor-cli",
-    agent_name: "hiq-editor CLI",
-    scope: "lca_data",
+    agent_name: "HiQ Editor CLI",
+    // editor(deck ≥0.7.223):同样换 SSO accessToken,但授权页如实展示
+    // 「读取与录入 LCA 数据集」—— 别换回 lca_data,那页文案只写了查询。
+    scope: "editor",
     client_skill: "hiq-editor-cli",
     client_host: process.env.HIQ_EDITOR_CLIENT_HOST?.trim() || "cli",
     client_version: VERSION,
