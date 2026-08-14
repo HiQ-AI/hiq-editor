@@ -1,15 +1,83 @@
 # @hiq-ai/hiq-editor
 
-Open local stdio [MCP](https://modelcontextprotocol.io) **gateway** for the
-**HiQ LCA dataset editor**. It runs on the host machine (Cortex Desktop / Claude
-Code spawns it over stdio), connects to the editor server's MCP endpoint
-(Streamable HTTP) as an MCP client, **dynamically re-exposes the server's tools**
-over stdio, and adds **local file capabilities** — parsing UPR `.xlsx` templates
-and exporting process detail to disk — that a remote server cannot do.
+Command-line + MCP client for the **HiQ LCA dataset editor**. One package, two
+faces:
+
+- **`hiq-editor` CLI** (primary) — every editor tool as a real subcommand with
+  schema-driven flags, generated at runtime from the server's tool catalog,
+  plus `import` for whole-UPR batch entry with checkpoint/resume.
+- **stdio MCP gateway** (bin `hiq-editor-mcp`, module `@hiq-ai/hiq-editor/mcp`) —
+  spawned by MCP hosts (Cortex Desktop, Claude Code, …); dynamically re-exposes
+  the editor server's tools over stdio and adds local file tools (UPR `.xlsx`
+  parsing, process export).
 
 Apache-2.0. The proprietary parts (database schema, SQL, write/business logic,
-SSO internals) live in a separate closed server; this gateway only knows the
+SSO internals) live in a separate closed server; this client only knows the
 server's MCP endpoint URL and forwards the caller's SSO token to it.
+
+## CLI
+
+The `hiq-editor` binary (what `npx @hiq-ai/hiq-editor` runs) turns every
+gateway tool into a real subcommand. Subcommands and their flags
+are generated at runtime from the server's tool catalog (input JSON Schema →
+options), so there is no client-side schema copy to drift: required props are
+required flags, enums become choices, object/array props take JSON values.
+Names are the native tool names minus the `_tool` suffix, kebab-cased.
+
+```bash
+export HIQ_EDITOR_TOKEN=<your SSO token>
+
+npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
+npx @hiq-ai/hiq-editor describe add-exchange
+npx @hiq-ai/hiq-editor add-exchange --help   # per-command flags
+
+npx @hiq-ai/hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
+npx @hiq-ai/hiq-editor get-process-detail --process-id 12345
+npx @hiq-ai/hiq-editor add-exchange --process-id 12345 \
+  --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
+  --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
+npx @hiq-ai/hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
+```
+
+The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
+(`--args` defaults to `{}`).
+
+Exit codes: `0` ok · `2` config (e.g. missing token) · `3` validation (bad
+args / plan) · `4` upstream (server rejected the operation) · `5` transport
+(cannot reach the server) · `1` unknown.
+
+### `import` — whole-UPR batch import
+
+`hiq-editor import <plan.json>` runs the complete authoring sequence — create
+process → reference product → exchanges → optional trial calc (`--calc`) — as
+one command with checkpoint/resume: after every successful write it updates
+`<plan>.state.json`, so a failed run re-runs with the same command and resumes
+where it stopped (the state file is removed on full success). Fix a failing
+entry **in place** — progress is tracked by exchange index, so don't insert or
+remove rows mid-import; the state is bound to the plan's `process.name`.
+
+Plan fields map 1:1 onto the tool args (`process` = `create_process_tool` args,
+each entry of `exchanges` = `add_exchange_tool` args minus `process_id`):
+
+```jsonc
+{
+  "process":           { "name": "...", "datasource": "...", "middle_flow_id": "...", /* … */ },
+  "reference_product": { "value": 1, "declared_unit_id": "..." },   // flow_id defaults to process.middle_flow_id
+  "exchanges": [
+    { "category": "RAW_MATERIAL", "value": 0.8, "material_name": "木浆",
+      "background": { "up_element_id": "...", "up_element_uuid": "...", "up_element_name": "...",
+                      "data_source": "HiQLCD", "data_version": "1.4.0" } },
+    { "category": "AIR_EMISSION", "value": 0.1, "flow_id": "..." }
+  ],
+  "calculate": false
+}
+```
+
+Resolving a 背景数据唯一ID into the `background` tuple (and picking a version) is
+the caller's decision — run `call search_backgrounds_tool` first and put the
+resolved tuple in the plan; empty or partial tuples are rejected up front.
+`--dry-run` validates the plan and prints the step list without writing;
+`--process-id <id>` attaches to an existing process instead of creating one.
 
 ## Architecture
 
@@ -124,64 +192,6 @@ Writes:
 | `export_process` | Fetch a process's detail and write it to a local file. |
 
 Both local tools require **absolute** file paths.
-
-## CLI
-
-The `hiq-editor` binary (what `npx @hiq-ai/hiq-editor` runs) turns every
-gateway tool into a real subcommand. Subcommands and their flags
-are generated at runtime from the server's tool catalog (input JSON Schema →
-options), so there is no client-side schema copy to drift: required props are
-required flags, enums become choices, object/array props take JSON values.
-Names are the native tool names minus the `_tool` suffix, kebab-cased.
-
-```bash
-export HIQ_EDITOR_TOKEN=<your SSO token>
-
-npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
-npx @hiq-ai/hiq-editor describe add-exchange
-npx @hiq-ai/hiq-editor add-exchange --help   # per-command flags
-
-npx @hiq-ai/hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
-npx @hiq-ai/hiq-editor get-process-detail --process-id 12345
-npx @hiq-ai/hiq-editor add-exchange --process-id 12345 \
-  --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
-  --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
-npx @hiq-ai/hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
-```
-
-The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
-(`--args` defaults to `{}`).
-
-### `import` — whole-UPR batch import
-
-`hiq-editor import <plan.json>` runs the complete authoring sequence — create
-process → reference product → exchanges → optional trial calc (`--calc`) — as
-one command with checkpoint/resume: after every successful write it updates
-`<plan>.state.json`, so a failed run re-runs with the same command and resumes
-where it stopped (the state file is removed on full success).
-
-Plan fields map 1:1 onto the tool args (`process` = `create_process_tool` args,
-each entry of `exchanges` = `add_exchange_tool` args minus `process_id`):
-
-```jsonc
-{
-  "process":           { "name": "...", "datasource": "...", "middle_flow_id": "...", /* … */ },
-  "reference_product": { "value": 1, "declared_unit_id": "..." },   // flow_id defaults to process.middle_flow_id
-  "exchanges": [
-    { "category": "RAW_MATERIAL", "value": 0.8, "material_name": "木浆",
-      "background": { "up_element_id": "...", "up_element_uuid": "...", "up_element_name": "...",
-                      "data_source": "HiQLCD", "data_version": "1.4.0" } },
-    { "category": "AIR_EMISSION", "value": 0.1, "flow_id": "..." }
-  ],
-  "calculate": false
-}
-```
-
-Resolving a 背景数据唯一ID into the `background` tuple (and picking a version) is
-the caller's decision — run `call search_backgrounds_tool` first and put the
-resolved tuple in the plan; empty or partial tuples are rejected up front.
-`--dry-run` validates the plan and prints the step list without writing;
-`--process-id <id>` attaches to an existing process instead of creating one.
 
 ## Development
 

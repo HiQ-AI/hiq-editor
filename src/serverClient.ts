@@ -15,8 +15,8 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { config } from "./config.js";
 import { EditorClientError } from "./types.js";
+import { VERSION } from "./version.js";
 
-const VERSION = "0.1.0";
 const REQUEST_TIMEOUT_MS = 120_000;
 
 let clientPromise: Promise<Client> | undefined;

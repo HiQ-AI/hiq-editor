@@ -23,7 +23,6 @@
  * every successful write the state file (`<plan>.state.json`) is updated, so a
  * failed run resumes where it stopped; it is deleted on full success.
  */
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { callRemoteTool } from "./serverClient.js";
@@ -37,7 +36,10 @@ export interface ImportPlan {
 }
 
 interface ImportState {
-  planHash: string;
+  /** The plan's process.name — binds the state to one import. Editing plan
+   *  entries in place keeps the state valid; a different process name means a
+   *  different import and the state is rejected. */
+  processName: string;
   processId?: string;
   referenceProductDone?: boolean;
   exchangesDone: number[];
@@ -139,16 +141,17 @@ async function invoke(tool: string, args: Record<string, unknown>): Promise<stri
   return text;
 }
 
-function loadState(statePath: string, planHash: string): ImportState {
+function loadState(statePath: string, processName: string): ImportState {
   if (!existsSync(statePath)) {
-    return { planHash, exchangesDone: [] };
+    return { processName, exchangesDone: [] };
   }
   const state = JSON.parse(readFileSync(statePath, "utf-8")) as ImportState;
-  if (state.planHash !== planHash) {
+  if (state.processName !== processName) {
     throw new EditorClientError(
       "config",
-      `state file ${statePath} was written for a different version of this plan — ` +
-        "delete it to start over, or restore the original plan to resume.",
+      `state file ${statePath} belongs to process '${state.processName}', but this plan's ` +
+        `process.name is '${processName}' — it is a different import. Delete the state file ` +
+        "or pass --state with a fresh path.",
     );
   }
   if (!Array.isArray(state.exchangesDone)) {
@@ -193,9 +196,8 @@ export async function runImport(planPath: string, opts: ImportOptions): Promise<
     return;
   }
 
-  const planHash = createHash("sha256").update(rawPlan).digest("hex");
   const statePath = opts.statePath ?? planPath.replace(/(\.json)?$/, ".state.json");
-  const state = loadState(statePath, planHash);
+  const state = loadState(statePath, String(plan.process.name));
   const saveState = () => writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
 
   // ── 1. Create process (or attach) ──
@@ -275,7 +277,8 @@ export async function runImport(planPath: string, opts: ImportOptions): Promise<
       throw new EditorClientError(
         err instanceof EditorClientError ? err.kind : "upstream",
         `exchange ${i + 1}/${exchanges.length} (${String(ex.category)} ${label}) failed after ` +
-          `${done} exchange(s) imported. Fix the plan entry if needed and re-run the same command to resume.\n` +
+          `${done} exchange(s) imported. Fix the plan entry IN PLACE if needed (don't insert/remove ` +
+          `rows — progress is tracked by index) and re-run the same command to resume.\n` +
           `${err instanceof Error ? err.message : String(err)}`,
       );
     }

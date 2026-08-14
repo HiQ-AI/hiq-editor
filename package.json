@@ -1,7 +1,7 @@
 {
   "name": "@hiq-ai/hiq-editor",
   "version": "0.4.1",
-  "description": "Open local stdio MCP gateway for the HiQ LCA dataset editor — connects to the editor server's MCP endpoint, re-exposes its tools, and adds local UPR-template / file tools.",
+  "description": "HiQ LCA dataset editor client — the `hiq-editor` CLI (schema-driven subcommands + whole-UPR `import` with checkpoint/resume) and a stdio MCP gateway (`hiq-editor-mcp`) that re-exposes the editor server's tools, plus local UPR-template / file tools.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -12,7 +12,6 @@
     "hiq-editor": "./dist/cli.js"
   },
   "exports": {
-    ".": "./dist/server.js",
     "./mcp": "./dist/server.js",
     "./tools": {
       "import": "./dist/tools/index.js",
@@ -49,6 +48,7 @@
   "homepage": "https://github.com/HiQ-AI/hiq-editor#readme",
   "bugs": "https://github.com/HiQ-AI/hiq-editor/issues",
   "keywords": [
+    "cli",
     "mcp",
     "lca",
     "carbon-footprint",

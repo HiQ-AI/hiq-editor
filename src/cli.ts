@@ -20,19 +20,12 @@ import yargs from "yargs";
 import type { ArgumentsCamelCase } from "yargs";
 import { hideBin } from "yargs/helpers";
 
-import { readFileSync } from "node:fs";
-
 import { localToolDefs } from "./tools/index.js";
 import { listRemoteTools, callRemoteTool } from "./serverClient.js";
 import { runImport } from "./importPlan.js";
 import { registerToolCommands, toolAlias, type CatalogTool } from "./dynamicCommands.js";
 import { EditorClientError } from "./types.js";
-
-const VERSION = (
-  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8")) as {
-    version: string;
-  }
-).version;
+import { VERSION } from "./version.js";
 
 const localByName = new Map(localToolDefs.map((t) => [t.name, t]));
 
