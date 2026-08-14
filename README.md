@@ -1,4 +1,4 @@
-# @hiq-ai/hiq-editor-mcp
+# @hiq-ai/hiq-editor
 
 Open local stdio [MCP](https://modelcontextprotocol.io) **gateway** for the
 **HiQ LCA dataset editor**. It runs on the host machine (Cortex Desktop / Claude
@@ -15,7 +15,7 @@ server's MCP endpoint URL and forwards the caller's SSO token to it.
 
 ```
 ┌──────────────────────────────────────┐  HTTPS   ┌────────────────────────────┐
-│  @hiq-ai/hiq-editor-mcp  (this, open) │  + SSO   │  editor server  (closed)   │
+│  @hiq-ai/hiq-editor  (this, open)    │  + SSO   │  editor server  (closed)   │
 │  • stdio MCP server (gateway)         │ ───────> │  • /mcp/editor             │
 │  • re-exposes remote tools 1:1        │  token   │    (Streamable HTTP MCP)   │
 │  • LOCAL: parse_upr_template,         │ <─────── │  • SQL reads + writes + SSO│
@@ -64,7 +64,7 @@ token the host supplies) — so the host config only needs the token:
   "mcpServers": {
     "editor": {
       "command": "npx",
-      "args": ["-y", "@hiq-ai/hiq-editor-mcp"],
+      "args": ["-y", "-p", "@hiq-ai/hiq-editor", "hiq-editor-mcp"],
       "env": {
         "HIQ_EDITOR_TOKEN": "<your SSO token>"
       }
@@ -127,8 +127,8 @@ Both local tools require **absolute** file paths.
 
 ## CLI
 
-The `hiq-editor` binary (shipped by this package — select it with `npx -p`)
-turns every gateway tool into a real subcommand. Subcommands and their flags
+The `hiq-editor` binary (what `npx @hiq-ai/hiq-editor` runs) turns every
+gateway tool into a real subcommand. Subcommands and their flags
 are generated at runtime from the server's tool catalog (input JSON Schema →
 options), so there is no client-side schema copy to drift: required props are
 required flags, enums become choices, object/array props take JSON values.
@@ -137,16 +137,16 @@ Names are the native tool names minus the `_tool` suffix, kebab-cased.
 ```bash
 export HIQ_EDITOR_TOKEN=<your SSO token>
 
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor list          # tool catalog (--json for schemas)
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor describe add-exchange
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor add-exchange --help   # per-command flags
+npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
+npx @hiq-ai/hiq-editor describe add-exchange
+npx @hiq-ai/hiq-editor add-exchange --help   # per-command flags
 
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor get-process-detail --process-id 12345
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor add-exchange --process-id 12345 \
+npx @hiq-ai/hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
+npx @hiq-ai/hiq-editor get-process-detail --process-id 12345
+npx @hiq-ai/hiq-editor add-exchange --process-id 12345 \
   --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
   --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
-npx -p @hiq-ai/hiq-editor-mcp hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
+npx @hiq-ai/hiq-editor parse-upr-template --file-path /abs/path/UPR.xlsx
 ```
 
 The raw escape hatch remains: `call <native_tool_name> --args '<json>'`

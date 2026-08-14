@@ -4,7 +4,7 @@
 
 Please report security issues **privately**, not in a public issue:
 
-- Open a [GitHub Security Advisory](https://github.com/HiQ-AI/hiq-editor-mcp/security/advisories/new)
+- Open a [GitHub Security Advisory](https://github.com/HiQ-AI/hiq-editor/security/advisories/new)
   on this repository (preferred), or
 - email **security@hiq.earth** with the details and, if possible, a reproduction.
 

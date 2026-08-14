@@ -1,6 +1,6 @@
-# Contributing to hiq-editor-mcp
+# Contributing to hiq-editor
 
-Thanks for your interest in improving hiq-editor-mcp. This project is the open
+Thanks for your interest in improving hiq-editor. This project is the open
 local stdio MCP client for the HiQ LCA dataset editor — it forwards business
 operations to the editor server's HTTP API and adds local file capabilities.
 Contributions of bug fixes, improved tool descriptions, and documentation are
@@ -16,8 +16,8 @@ welcome.
 ## Setup
 
 ```bash
-git clone https://github.com/HiQ-AI/hiq-editor-mcp.git
-cd hiq-editor-mcp
+git clone https://github.com/HiQ-AI/hiq-editor.git
+cd hiq-editor
 npm install
 npm run build        # tsc → dist/  (this is the check a PR must pass)
 ```
@@ -29,7 +29,7 @@ write/business logic, SSO internals — live in the closed editor server. This
 package only knows the server's HTTP API contract:
 
 ```
-hiq-editor-mcp (this, open)  ──HTTPS + Bearer SSO token──>  editor server (closed)
+hiq-editor (this, open)  ──HTTPS + Bearer SSO token──>  editor server (closed)
   • stdio MCP server (server.ts)                              • POST /tools/:name
   • CLI (cli.ts)                                              • GET  /tools
   • 16 business tools → forward to the server

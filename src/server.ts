@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Stdio MCP gateway entry. What `npx -y @hiq-ai/hiq-editor-mcp` runs.
+ * Stdio MCP gateway entry. What `npx -p @hiq-ai/hiq-editor hiq-editor-mcp` runs.
  *
  * This is a gateway, not a forwarder: it connects to the editor server's
  * Streamable-HTTP MCP endpoint (HIQ_EDITOR_SERVER_URL, e.g.
