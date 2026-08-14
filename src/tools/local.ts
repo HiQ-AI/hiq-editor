@@ -198,4 +198,48 @@ export const exportProcess: LocalToolDef = {
   },
 };
 
-export const localTools: LocalToolDef[] = [parseUprTemplate, exportProcess];
+export const importUprFromFile: LocalToolDef = {
+  name: "import_upr_from_file",
+  description:
+    "LOCAL. Import a whole UPR workbook (.xlsx template) from a local file in ONE call — " +
+    "creates the dataset (omit process_id) or appends 工序 sheets to an existing one. " +
+    "The server parses all sheets, sets the reference product itself, and rejects the " +
+    "whole file on any parse error (nothing half-written). Prefer this over " +
+    "create_process_tool + add_exchange_tool loops when a filled template exists. " +
+    "file_path must be absolute.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      file_path: { type: "string", description: "Absolute path to the filled UPR .xlsx." },
+      datasource: { type: "string", description: "Datasource name (e.g. 'GBA')." },
+      process_id: {
+        type: "string",
+        description: "Append to this existing process instead of creating a new dataset.",
+      },
+      need_desensitize: {
+        type: "boolean",
+        description: "Run the desensitization scan after import (default false).",
+      },
+    },
+    required: ["file_path", "datasource"],
+    additionalProperties: false,
+  },
+  handler: async (args) => {
+    const filePath = requireAbsolute("file_path", String(args.file_path ?? ""));
+    const bytes = await readBytes(filePath);
+    const { callRemoteTool } = await import("../serverClient.js");
+    const result = await callRemoteTool("import_upr_xlsx_tool", {
+      datasource: String(args.datasource ?? ""),
+      file_base64: bytes.toString("base64"),
+      file_name: filePath.split("/").pop() ?? "upr.xlsx",
+      ...(args.process_id ? { process_id: String(args.process_id) } : {}),
+      ...(args.need_desensitize === true ? { need_desensitize: true } : {}),
+    });
+    if ((result as { isError?: boolean }).isError) {
+      throw new Error(contentToText(result));
+    }
+    return [{ type: "text", text: contentToText(result) }];
+  },
+};
+
+export const localTools: LocalToolDef[] = [parseUprTemplate, exportProcess, importUprFromFile];
