@@ -434,6 +434,11 @@ async function main(): Promise<void> {
     y = registerToolCommands(y, await loadCatalog(true, true), invokeByName, emitError) as typeof y;
   }
   await y.parseAsync();
+
+  // One-shot process hygiene: the MCP transport keeps the event loop alive
+  // after a successful remote call — close it so the CLI exits.
+  const { closeRemoteClient } = await import("./serverClient.js");
+  await closeRemoteClient();
 }
 
 main().catch((err) => emitError(err));

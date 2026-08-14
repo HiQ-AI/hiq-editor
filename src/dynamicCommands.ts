@@ -100,6 +100,11 @@ export function registerToolCommands(
       alias,
       firstSentence(t.description) + (t.local ? " (local)" : ""),
       (yy) => {
+        // A tool arg named `version` collides with yargs' built-in --version —
+        // disable the built-in on this subcommand so the tool arg wins.
+        if (specs.some((sp) => sp.flag === "version")) {
+          yy = yy.version(false);
+        }
         for (const sp of specs) {
           yy = yy.option(sp.flag, sp.opt);
         }

@@ -85,6 +85,20 @@ async function connect(): Promise<Client> {
   return client;
 }
 
+/** Close the remote connection so a one-shot process (the CLI) can exit —
+ *  the Streamable HTTP transport otherwise keeps the event loop alive. */
+export async function closeRemoteClient(): Promise<void> {
+  if (!clientPromise) return;
+  try {
+    const client = await clientPromise;
+    await client.close();
+  } catch {
+    // closing best-effort — the process is exiting anyway
+  } finally {
+    clientPromise = undefined;
+  }
+}
+
 /** The remote server's tool catalog (name, description, inputSchema). */
 export async function listRemoteTools(): Promise<Tool[]> {
   const client = await getRemoteClient();
