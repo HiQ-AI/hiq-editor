@@ -138,6 +138,9 @@ export HIQ_EDITOR_TOKEN=<your SSO token>
 # List the tools the gateway exposes (remote + local).
 npx -p @hiq-ai/hiq-editor-mcp hiq-editor list
 
+# Print a tool's description + input JSON Schema (know the args before calling).
+npx -p @hiq-ai/hiq-editor-mcp hiq-editor describe add_exchange_tool
+
 # Invoke any tool by name, passing args as a JSON object.
 npx -p @hiq-ai/hiq-editor-mcp hiq-editor call list_datasources
 npx -p @hiq-ai/hiq-editor-mcp hiq-editor call get_process_detail_tool --args '{"process_id":"12345"}'
@@ -145,6 +148,38 @@ npx -p @hiq-ai/hiq-editor-mcp hiq-editor call parse_upr_template --args '{"file_
 ```
 
 `--args` defaults to `{}`. Tool names are the server's native (snake_case) names.
+`list --json` emits the full catalog with input schemas, machine-readable.
+
+### `import` — whole-UPR batch import
+
+`hiq-editor import <plan.json>` runs the complete authoring sequence — create
+process → reference product → exchanges → optional trial calc (`--calc`) — as
+one command with checkpoint/resume: after every successful write it updates
+`<plan>.state.json`, so a failed run re-runs with the same command and resumes
+where it stopped (the state file is removed on full success).
+
+Plan fields map 1:1 onto the tool args (`process` = `create_process_tool` args,
+each entry of `exchanges` = `add_exchange_tool` args minus `process_id`):
+
+```jsonc
+{
+  "process":           { "name": "...", "datasource": "...", "middle_flow_id": "...", /* … */ },
+  "reference_product": { "value": 1, "declared_unit_id": "..." },   // flow_id defaults to process.middle_flow_id
+  "exchanges": [
+    { "category": "RAW_MATERIAL", "value": 0.8, "material_name": "木浆",
+      "background": { "up_element_id": "...", "up_element_uuid": "...", "up_element_name": "...",
+                      "data_source": "HiQLCD", "data_version": "1.4.0" } },
+    { "category": "AIR_EMISSION", "value": 0.1, "flow_id": "..." }
+  ],
+  "calculate": false
+}
+```
+
+Resolving a 背景数据唯一ID into the `background` tuple (and picking a version) is
+the caller's decision — run `call search_backgrounds_tool` first and put the
+resolved tuple in the plan; empty or partial tuples are rejected up front.
+`--dry-run` validates the plan and prints the step list without writing;
+`--process-id <id>` attaches to an existing process instead of creating one.
 
 ## Development
 
