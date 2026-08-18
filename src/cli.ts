@@ -18,7 +18,6 @@
  */
 import yargs from "yargs";
 import type { ArgumentsCamelCase } from "yargs";
-import { hideBin } from "yargs/helpers";
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -270,7 +269,14 @@ async function runDoctor(): Promise<void> {
 const STATIC_COMMANDS = new Set(["list", "describe", "call", "import", "doctor", "login", "logout", "version"]);
 
 async function main(): Promise<void> {
-  const rawArgs = hideBin(process.argv);
+  // NOT hideBin(): under ELECTRON_RUN_AS_NODE the host still reports
+  // `process.versions.electron` while `process.defaultApp` is undefined, so
+  // yargs decides it is a *packaged Electron app* and strips only argv[0] —
+  // leaving the script path in as the first positional. Every command then
+  // dies with "unrecognized option: …/cli.js". This CLI is always launched as
+  // `<runtime> cli.js …` (node, or Electron-as-node inside Cortex Desktop),
+  // so argv[2:] is the correct slice in both.
+  const rawArgs = process.argv.slice(2);
   const first = rawArgs.find((a) => !a.startsWith("-"));
   const needDynamic = !first || !STATIC_COMMANDS.has(first);
 
