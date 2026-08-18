@@ -1,6 +1,7 @@
 # Node / TS build artefacts
 node_modules/
 dist/
+dist-bin/
 *.tsbuildinfo
 *.tgz
 

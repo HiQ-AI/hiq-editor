@@ -1,14 +1,18 @@
 # Publish a release on a version tag.
 #
 # Delivery is anonymous for consumers (no token to install):
-#   1. npm  — `npm publish` via **Trusted Publishing (OIDC)**, so hosts can
-#             `npx @hiq-ai/hiq-editor-mcp` or depend on the package. NO npm token
+#   1. Native binaries — single-file executables for macOS / Linux / Windows,
+#             cross-compiled by `bun build --compile`. No runtime on the machine;
+#             `scripts/install.sh` / `.ps1` are the one-line installers, served
+#             from download.hiq.earth (github.com is blocked in mainland China).
+#   2. npm  — `npm publish` via **Trusted Publishing (OIDC)**, so hosts can
+#             `npx @hiq-ai/hiq-editor` or depend on the package. NO npm token
 #             and NO repo secret: GitHub Actions proves its identity to npm over
 #             OIDC (`id-token: write`), and npm generates provenance automatically.
 #             One-time setup: the package must already exist (do a single manual
 #             first publish), then add this repo + workflow as a Trusted Publisher
 #             in the package's npmjs.com settings.
-#   2. GitHub Release — carries the packed tarball.
+#   3. GitHub Release — carries the binaries, checksums and the npm tarball.
 #
 # This package has no out-of-band data asset (it forwards to the editor server
 # at runtime), so a release is just {code (npm + tarball)}.
@@ -23,7 +27,28 @@ permissions:
   id-token: write   # npm Trusted Publishing (OIDC) + provenance
 
 jobs:
+  # Runs on macOS because only a Mac can codesign the Darwin binaries; Bun
+  # cross-compiles the Linux and Windows targets from here just as well.
+  binaries:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      # npm, not `bun install`: the binaries and the npm package then resolve
+      # through the same package-lock.json and cannot drift apart.
+      - run: npm ci
+      - run: ./scripts/build-binaries.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist-bin/*
+          retention-days: 1
+
   release:
+    needs: binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,10 +65,37 @@ jobs:
       - name: Pack tarball for the GitHub Release
         id: pack
         run: echo "tgz=$(npm pack --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with: { name: binaries, path: dist-bin }
       - name: Create / update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \
+          assets=(dist-bin/* "${{ steps.pack.outputs.tgz }}")
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag \
-          || gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber
+          || gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+
+  # The installers are the path most users take, so they get exercised against
+  # the real Release — with no version pinned, so this covers the default
+  # `releases/latest/download` resolution too.
+  verify-install:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh
+        if: runner.os != 'Windows'
+        run: |
+          sh scripts/install.sh
+          "$HOME/.local/bin/hiq-editor" version
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/install.ps1
+          & "$env:LOCALAPPDATA\Programs\hiq-editor\hiq-editor.exe" version
