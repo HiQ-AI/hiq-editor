@@ -21,6 +21,15 @@ const REQUEST_TIMEOUT_MS = 120_000;
 
 let clientPromise: Promise<Client> | undefined;
 
+/** 认出「鉴权被拒」:优先看 SDK 带出来的 HTTP 状态,没有就从响应体文本里认
+ *  401/403。只认这两个码 —— 其余一律算连接问题,宁可少判也不误判。 */
+function isAuthRejection(err: unknown, msg: string): boolean {
+  const e = err as { status?: number; code?: number } | undefined;
+  if (e?.status === 401 || e?.status === 403) return true;
+  if (e?.code === 401 || e?.code === 403) return true;
+  return /\b(401|403)\b/.test(msg);
+}
+
 /** Connect to the remote MCP endpoint once and reuse the client. */
 export function getRemoteClient(): Promise<Client> {
   if (!config.token) {
@@ -77,6 +86,17 @@ async function connect(): Promise<Client> {
     await client.connect(transport);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // 「连不上」和「没通过鉴权」是两回事,报错要指对方向:前者让人查网络,后者
+    // 让人重新登录。SDK 把服务端响应体原样塞进 message,401/403 从那里认;认不
+    // 出来就仍按 transport 报,不猜。
+    if (isAuthRejection(err, msg)) {
+      throw new EditorClientError(
+        "config",
+        `editor rejected the current credential (401/403) at ${config.serverUrl}. ` +
+          `The session token is missing, expired, or not valid for this account — sign in again ` +
+          `(\`hiq-editor login\`), or have the host re-inject HIQ_EDITOR_TOKEN. Server said: ${msg}`,
+      );
+    }
     throw new EditorClientError(
       "transport",
       `could not connect to editor MCP endpoint ${config.serverUrl}: ${msg}`,
