@@ -15,9 +15,30 @@ Apache-2.0. The proprietary parts (database schema, SQL, write/business logic,
 SSO internals) live in a separate closed server; this client only knows the
 server's MCP endpoint URL and forwards the caller's SSO token to it.
 
+## Install
+
+A single self-contained executable — no Node, no Python, no runtime of any kind
+on the machine.
+
+```bash
+curl -fsSL https://download.hiq.earth/cli/hiq-editor/install.sh | sh   # macOS / Linux
+```
+
+```powershell
+irm https://download.hiq.earth/cli/hiq-editor/install.ps1 | iex        # Windows
+```
+
+Served from a CDN that is reachable from mainland China, where github.com and
+raw.githubusercontent.com are both blocked; GitHub Releases stays the source of
+truth. Binaries for macOS (arm64/x64), Linux (x64/arm64) and Windows (x64) are
+attached to every [release](https://github.com/HiQ-AI/hiq-editor/releases) too.
+
+Where Node is already present, `npx @hiq-ai/hiq-editor <command>` runs the same
+CLI without installing anything.
+
 ## CLI
 
-The `hiq-editor` binary (what `npx @hiq-ai/hiq-editor` runs) turns every
+`hiq-editor` turns every
 gateway tool into a real subcommand. Subcommands and their flags
 are generated at runtime from the server's tool catalog (input JSON Schema →
 options), so there is no client-side schema copy to drift: required props are
@@ -25,19 +46,19 @@ required flags, enums become choices, object/array props take JSON values.
 Names are the native tool names minus the `_tool` suffix, kebab-cased.
 
 ```bash
-npx @hiq-ai/hiq-editor login         # QR sign-in (or: export HIQ_EDITOR_TOKEN=<SSO token>)
+hiq-editor login         # QR sign-in (or: export HIQ_EDITOR_TOKEN=<SSO token>)
 
-npx @hiq-ai/hiq-editor doctor        # config + connectivity + catalog self-check
-npx @hiq-ai/hiq-editor list          # tool catalog (--json for schemas)
-npx @hiq-ai/hiq-editor describe add-exchange
-npx @hiq-ai/hiq-editor add-exchange --help   # per-command flags
+hiq-editor doctor        # config + connectivity + catalog self-check
+hiq-editor list          # tool catalog (--json for schemas)
+hiq-editor describe add-exchange
+hiq-editor add-exchange --help   # per-command flags
 
-npx @hiq-ai/hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
-npx @hiq-ai/hiq-editor get-process-detail --process-id 12345
-npx @hiq-ai/hiq-editor add-exchange --process-id 12345 \
+hiq-editor search-flows --keyword 铝锭 --flow-type PRODUCT_FLOW
+hiq-editor get-process-detail --process-id 12345
+hiq-editor add-exchange --process-id 12345 \
   --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
   --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
-npx @hiq-ai/hiq-editor import-upr-from-file --file-path /abs/path/UPR.xlsx --datasource GBA
+hiq-editor import-upr-from-file --file-path /abs/path/UPR.xlsx --datasource GBA
 ```
 
 The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
@@ -223,9 +244,18 @@ Both local tools require **absolute** file paths.
 
 ```bash
 npm install
-npm run build     # tsc → dist/
-npm run dev       # stdio MCP server via tsx
+npm run build       # tsc → dist/ (the npm channel)
+npm run dev         # stdio MCP server via tsx
+npm run build:bin   # bun --compile → dist-bin/ (every platform, needs bun)
 ```
+
+`build:bin` cross-compiles all five targets from whichever machine runs it;
+only the Darwin binaries need a Mac, to be codesigned. Releases build them on a
+macOS runner for that reason.
+
+The version lives in `package.json` alone — `prebuild` stamps it into
+`src/version.ts`, because a single-file binary has no manifest to read at
+runtime.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
