@@ -76,26 +76,43 @@ jobs:
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag \
           || gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
 
+  # 国内直连 GitHub 不通,CDN 才是用户实际走的下载源 —— 跟着发布一起推,
+  # 不能等人想起来手动跑,否则 install.sh 会一直装到旧版本。
+  mirror-cdn:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DOWNLOAD_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DOWNLOAD_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+      DOWNLOAD_S3_BUCKET: ${{ secrets.DOWNLOAD_S3_BUCKET }}
+      DOWNLOAD_CF_DIST_ID: ${{ secrets.DOWNLOAD_CF_DIST_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/mirror-to-cdn.sh "$GITHUB_REF_NAME"
+
   # The installers are the path most users take, so they get exercised against
   # the real Release — with no version pinned, so this covers the default
   # `releases/latest/download` resolution too.
   verify-install:
-    needs: release
+    needs: mirror-cdn
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: install.sh
+      # 装的是 CDN 上那一份 —— 用户复制粘贴的就是这一行,连同镜像是否推上去
+      # 一起验;跑仓里的副本只能证明脚本本身没写错。
+      - name: install.sh (CDN)
         if: runner.os != 'Windows'
         run: |
-          sh scripts/install.sh
+          curl -fsSL https://download.hiq.earth/cli/hiq-editor/install.sh | sh
           "$HOME/.local/bin/hiq-editor" version
-      - name: install.ps1
+      - name: install.ps1 (CDN)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          ./scripts/install.ps1
+          irm https://download.hiq.earth/cli/hiq-editor/install.ps1 | iex
           & "$env:LOCALAPPDATA\Programs\hiq-editor\hiq-editor.exe" version
