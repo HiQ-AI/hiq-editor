@@ -19,6 +19,7 @@ export interface JsonSchema {
   properties?: Record<string, unknown>;
   required?: string[];
   additionalProperties?: boolean;
+  pattern?: string;
 }
 
 export interface LocalToolDef {
@@ -66,6 +67,13 @@ export const importUprFromFile: LocalToolDef = {
         type: "boolean",
         description: "Run the desensitization scan after import (default false).",
       },
+      product_category_code: {
+        type: "string",
+        description:
+          "CPC code returned by search-product-categories. For a new dataset, the " +
+          "server uses it to create or reuse the workbook's reference PRODUCT_FLOW.",
+        pattern: "^\\d{1,5}$",
+      },
     },
     required: ["file_path", "datasource"],
     additionalProperties: false,
@@ -80,6 +88,9 @@ export const importUprFromFile: LocalToolDef = {
       file_name: filePath.split("/").pop() ?? "upr.xlsx",
       ...(args.process_id ? { process_id: String(args.process_id) } : {}),
       ...(args.need_desensitize === true ? { need_desensitize: true } : {}),
+      ...(args.product_category_code
+        ? { product_category_code: String(args.product_category_code) }
+        : {}),
     });
     if ((result as { isError?: boolean }).isError) {
       throw new Error(contentToText(result));

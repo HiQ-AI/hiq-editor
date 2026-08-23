@@ -58,7 +58,9 @@ hiq-editor get-process-detail --process-id 12345
 hiq-editor add-exchange --process-id 12345 \
   --category RAW_MATERIAL --value 0.8 --material-name 木浆 \
   --background '{"up_element_id":"…","up_element_uuid":"…","up_element_name":"…","data_source":"HiQLCD","data_version":"1.4.0"}'
-hiq-editor import-upr-from-file --file-path /abs/path/UPR.xlsx --datasource GBA
+hiq-editor search-product-categories --keyword 汽车零部件
+hiq-editor import-upr-from-file --file-path /abs/path/UPR.xlsx --datasource GBA \
+  --product-category-code 4912
 ```
 
 The raw escape hatch remains: `call <native_tool_name> --args '<json>'`
@@ -215,6 +217,7 @@ Reads:
 | `get_process_detail_tool` | Full process detail (basic info, units, data items, exchanges). |
 | `get_process_status_tool` | Workflow status (approvals, calc tasks, releases). |
 | `search_flows_tool` | Search flows (ELEMENTARY_FLOW / PRODUCT_FLOW / WASTE_FLOW). |
+| `search_product_categories_tool` | Search the tenant's CPC product classification; use the returned code for a new whole-UPR import. |
 | `search_backgrounds_tool` | Search the background dataset catalog. |
 | `list_calculations` | View calculation tasks and status. |
 | `list_versions` | View database versions and release status. |
@@ -235,7 +238,7 @@ Writes:
 
 | Tool | What it does |
 |---|---|
-| `import_upr_from_file` | Import a filled official UPR `.xlsx` template in one transactional call — creates the dataset (or appends 工序 sheets), reference product included. |
+| `import_upr_from_file` | Import a filled official UPR `.xlsx` template in one transactional call. For a new dataset, pass `product_category_code` from `search_product_categories_tool` so the server can idempotently create/reuse a missing reference product flow before import. |
 | `export_process` | Fetch a process's detail and write it to a local file. |
 
 Both local tools require **absolute** file paths.
