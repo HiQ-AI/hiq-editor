@@ -20,6 +20,7 @@ import { VERSION } from "./version.js";
 const REQUEST_TIMEOUT_MS = 120_000;
 
 let clientPromise: Promise<Client> | undefined;
+let activeTransport: StreamableHTTPClientTransport | undefined;
 
 /** 认出「鉴权被拒」:优先看 SDK 带出来的 HTTP 状态,没有就从响应体文本里认
  *  401/403。只认这两个码 —— 其余一律算连接问题,宁可少判也不误判。 */
@@ -84,6 +85,7 @@ async function connect(): Promise<Client> {
   });
   try {
     await client.connect(transport);
+    activeTransport = transport;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // 「连不上」和「没通过鉴权」是两回事,报错要指对方向:前者让人查网络,后者
@@ -105,17 +107,34 @@ async function connect(): Promise<Client> {
   return client;
 }
 
+/** Explicitly terminate the stateful HTTP session before closing the client.
+ * `Client.close()` only closes local transport state; without terminateSession
+ * the remote server retains the session until process restart. Cleanup remains
+ * best-effort so a completed business command does not become a false failure. */
+export async function closeClientSession(
+  client: Pick<Client, "close">,
+  transport?: Pick<StreamableHTTPClientTransport, "terminateSession">,
+): Promise<void> {
+  try {
+    await transport?.terminateSession();
+  } catch {
+    // The command result is already final; a cleanup transport failure must not rewrite it.
+  }
+  await client.close();
+}
+
 /** Close the remote connection so a one-shot process (the CLI) can exit —
  *  the Streamable HTTP transport otherwise keeps the event loop alive. */
 export async function closeRemoteClient(): Promise<void> {
   if (!clientPromise) return;
   try {
     const client = await clientPromise;
-    await client.close();
+    await closeClientSession(client, activeTransport);
   } catch {
     // closing best-effort — the process is exiting anyway
   } finally {
     clientPromise = undefined;
+    activeTransport = undefined;
   }
 }
 
