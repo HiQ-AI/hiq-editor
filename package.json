@@ -1,6 +1,6 @@
 {
   "name": "@hiq-ai/hiq-editor",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "HiQ LCA dataset editor client — the `hiq-editor` CLI (schema-driven subcommands + whole-UPR `import` with checkpoint/resume) and a stdio MCP gateway (`hiq-editor-mcp`) that re-exposes the editor server's tools, plus local UPR-template / file tools.",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,6 +28,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/server.ts",
+    "test": "tsx --test tests/*.test.ts",
     "prepublishOnly": "npm run build",
     "prebuild": "node scripts/stamp-version.mjs",
     "build:bin": "./scripts/build-binaries.sh"
