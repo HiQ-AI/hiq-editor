@@ -46,7 +46,8 @@ required flags, enums become choices, object/array props take JSON values.
 Names are the native tool names minus the `_tool` suffix, kebab-cased.
 
 ```bash
-hiq-editor login         # QR sign-in (or: export HIQ_EDITOR_TOKEN=<SSO token>)
+hiq-editor login         # QR sign-in
+# Automation: export HIQ_EDITOR_API_KEY=<HiQ-issued API key>
 
 hiq-editor doctor        # config + connectivity + catalog self-check
 hiq-editor list          # tool catalog (--json for schemas)
@@ -162,8 +163,8 @@ gateway below with the signed-in session.)
 ### B. Local stdio gateway — this package
 
 Spawn it over stdio from your MCP host (Cortex Desktop, Claude Code, …). It adds
-the local file tools and handles authentication for you (it forwards the SSO
-token the host supplies) — so the host config only needs the token:
+the local file tools and supports either an interactive SSO session or a
+HiQ-issued API key:
 
 ```jsonc
 {
@@ -179,26 +180,32 @@ token the host supplies) — so the host config only needs the token:
 }
 ```
 
+For organization automation, set `HIQ_EDITOR_API_KEY` instead. The gateway sends
+it only as `X-API-Key`; it never also emits Bearer/cookie authentication.
+
 `HIQ_EDITOR_SERVER_URL` overrides the endpoint (defaults to
 `https://x.hiqlcd.com/mcp/editor`).
 
 ## Authentication
 
-The credential is the user's **SSO token**, obtained one of two ways
-(env wins when both are present):
+The credential is issued and validated by HiQ SSO. Choose exactly one transport:
 
 1. **Host-injected env** — `HIQ_EDITOR_TOKEN`, set by the host that spawns the
    CLI/gateway (Cortex Desktop does this automatically for the signed-in user).
-2. **`hiq-editor login`** — self-serve QR sign-in for standalone use (Claude
+2. **Host-injected API key** — `HIQ_EDITOR_API_KEY`, for organization automation.
+   It is forwarded as `X-API-Key` and remains subject to the key's tenant,
+   permissions, expiry, rate and usage limits.
+3. **`hiq-editor login`** — self-serve QR sign-in for standalone use (Claude
    Code, WorkBuddy, any agent runtime with no host injection): prints a QR +
    authorize link (deck OAuth device flow, scope `lca_data`), you approve on
    cortex.hiq.earth, and the credential is stored at
    `~/.config/hiq-editor/credentials.json` (mode 600). `hiq-editor logout`
    removes it; `doctor` shows which source is active.
 
-Either way the client forwards the token verbatim as
-`Authorization: Bearer <token>`; the server resolves the user and tenant from
-it. The token is never logged.
+Session credentials are forwarded as `Authorization: Bearer <token>` plus the
+existing edge cookie. API keys are forwarded only as `X-API-Key`. Credentials
+are never logged, and `HIQ_EDITOR_TOKEN` plus `HIQ_EDITOR_API_KEY` in the same
+environment is rejected as ambiguous configuration.
 
 ## Tool surface
 
