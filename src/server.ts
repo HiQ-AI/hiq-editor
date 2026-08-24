@@ -7,7 +7,8 @@
  * https://x.hiqlcd.com/mcp/editor) as an MCP client and dynamically re-exposes
  * the server's tools over stdio, plus 2 local filesystem tools
  * (import_upr_from_file, export_process). The host (Cortex Desktop / Claude Code)
- * spawns this and supplies HIQ_EDITOR_SERVER_URL + HIQ_EDITOR_TOKEN in the env.
+ * spawns this and supplies HIQ_EDITOR_SERVER_URL plus HIQ_EDITOR_TOKEN or
+ * HIQ_EDITOR_API_KEY in the env.
  *
  * Uses the LOW-LEVEL Server with two request handlers so remote tool schemas
  * pass through verbatim — no schema conversion, no duplication.
@@ -38,7 +39,7 @@ function errorText(err: unknown): string {
 
 async function main(): Promise<void> {
   process.stderr.write(
-    `hiq-editor-mcp ${VERSION} gateway starting (endpoint=${config.serverUrl}, local_tools=${localToolDefs.length}, token=${config.token ? "set" : "MISSING"})\n`,
+    `hiq-editor-mcp ${VERSION} gateway starting (endpoint=${config.serverUrl}, local_tools=${localToolDefs.length}, credential=${config.credential?.kind ?? "MISSING"})\n`,
   );
 
   const server = new Server(

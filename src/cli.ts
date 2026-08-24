@@ -14,7 +14,7 @@
  *                            (see importPlan.ts for the plan format).
  *   - `version`           — print version.
  *
- * Auth comes from HIQ_EDITOR_TOKEN in the env, exactly like the MCP server.
+ * Auth comes from HIQ_EDITOR_TOKEN or HIQ_EDITOR_API_KEY in the env, exactly like the MCP server.
  */
 import yargs from "yargs";
 import type { ArgumentsCamelCase } from "yargs";
@@ -218,12 +218,12 @@ async function runCall(tool: string, argsJson: string, fromStdin: boolean): Prom
 
 /** `doctor` — diagnose config, connectivity, and the tool catalog in one shot. */
 async function runDoctor(): Promise<void> {
-  const tokenSet = Boolean(config.token);
+  const credentialSet = Boolean(config.credential);
   let reachable = false;
   let toolCount = 0;
   let latencyMs = 0;
   let error: string | null = null;
-  if (tokenSet) {
+  if (credentialSet) {
     const t0 = Date.now();
     try {
       const { listRemoteTools } = await import("./serverClient.js");
@@ -235,10 +235,11 @@ async function runDoctor(): Promise<void> {
     }
   }
   const report = {
-    ok: tokenSet && reachable,
+    ok: credentialSet && reachable,
     version: VERSION,
     serverUrl: config.serverUrl,
-    tokenSet,
+    credentialSet,
+    credentialKind: config.credential?.kind ?? null,
     reachable,
     remoteTools: toolCount,
     localTools: localToolDefs.length,
@@ -251,12 +252,12 @@ async function runDoctor(): Promise<void> {
     process.stdout.write(
       `hiq-editor ${VERSION}\n` +
         `server:       ${report.serverUrl}\n` +
-        `token:        ${tokenSet ? (process.env.HIQ_EDITOR_TOKEN?.trim() ? "set (env)" : "set (login)") : "MISSING — export HIQ_EDITOR_TOKEN or run `hiq-editor login`"}\n` +
+        `credential:   ${config.credential ? `${config.credential.kind} (${config.credential.source})` : "MISSING — export HIQ_EDITOR_TOKEN / HIQ_EDITOR_API_KEY or run `hiq-editor login`"}\n` +
         `connectivity: ${reachable ? `ok (${toolCount} remote tools, ${latencyMs}ms)` : `FAILED${error ? ` — ${error}` : ""}`}\n` +
         `local tools:  ${report.localTools}\n`,
     );
   }
-  if (!tokenSet) {
+  if (!credentialSet) {
     process.exit(2);
   }
   if (!reachable) {
@@ -309,6 +310,7 @@ async function main(): Promise<void> {
     .epilogue(
       "Environment:\n" +
         "  HIQ_EDITOR_TOKEN       SSO token (required; env only — never a flag)\n" +
+        "  HIQ_EDITOR_API_KEY     HiQ API key (env only; mutually exclusive with token)\n" +
         "  HIQ_EDITOR_SERVER_URL  MCP endpoint (default: https://x.hiqlcd.com/mcp/editor)\n\n" +
         "Exit codes: 0 ok · 2 config · 3 validation · 4 upstream · 5 transport · 1 unknown\n" +
         "Docs: https://github.com/HiQ-AI/hiq-editor#readme",

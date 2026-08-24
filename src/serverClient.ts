@@ -33,11 +33,11 @@ function isAuthRejection(err: unknown, msg: string): boolean {
 
 /** Connect to the remote MCP endpoint once and reuse the client. */
 export function getRemoteClient(): Promise<Client> {
-  if (!config.token) {
+  if (!config.credential) {
     return Promise.reject(
       new EditorClientError(
         "config",
-        "No SSO token. Set HIQ_EDITOR_TOKEN in the environment the host spawns this MCP with.",
+        "No credential. Set HIQ_EDITOR_TOKEN or HIQ_EDITOR_API_KEY in the environment the host spawns this MCP with.",
       ),
     );
   }
@@ -49,6 +49,18 @@ export function getRemoteClient(): Promise<Client> {
     });
   }
   return clientPromise;
+}
+
+export function requestHeadersForCredential(
+  credential: NonNullable<typeof config.credential>,
+  site: string,
+): Record<string, string> {
+  if (credential.kind === "api-key") return { "X-API-Key": credential.value };
+  return {
+    Authorization: `Bearer ${credential.value}`,
+    "X-Site": site,
+    Cookie: `accessToken=${ssoAccessToken(credential.value)}`,
+  };
 }
 
 /** Pull the wrapped SSO accessToken out of a Cortex JWT (the `sso_token` claim)
@@ -71,16 +83,12 @@ async function connect(): Promise<Client> {
     { name: "hiq-editor-gateway", version: VERSION },
     { capabilities: {} },
   );
-  // Internal edge auth, matching what Cortex Desktop's connector sends for the
-  // signed-in session: X-Site selects the JWT-auth path for the forwarded SSO
-  // token, plus the accessToken cookie (the sso_token unwrapped from a Cortex JWT).
+  const credential = config.credential!;
   const transport = new StreamableHTTPClientTransport(new URL(config.serverUrl), {
     requestInit: {
-      headers: {
-        Authorization: `Bearer ${config.token}`,
-        "X-Site": config.site,
-        Cookie: `accessToken=${ssoAccessToken(config.token)}`,
-      },
+      // API keys use the server's public X-API-Key path. User sessions use the
+      // existing Bearer + edge cookie path. Never send both authentication forms.
+      headers: requestHeadersForCredential(credential, config.site),
     },
   });
   try {
@@ -95,8 +103,8 @@ async function connect(): Promise<Client> {
       throw new EditorClientError(
         "config",
         `editor rejected the current credential (401/403) at ${config.serverUrl}. ` +
-          `The session token is missing, expired, or not valid for this account — sign in again ` +
-          `(\`hiq-editor login\`), or have the host re-inject HIQ_EDITOR_TOKEN. Server said: ${msg}`,
+          `The HiQ credential is missing, expired, or not valid for this account — sign in again ` +
+          `(\`hiq-editor login\`), or have the host re-inject HIQ_EDITOR_TOKEN / HIQ_EDITOR_API_KEY. Server said: ${msg}`,
       );
     }
     throw new EditorClientError(
