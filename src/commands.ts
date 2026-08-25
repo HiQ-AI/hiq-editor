@@ -68,7 +68,15 @@ async function datasourceRows(): Promise<JsonObject[]> {
 
 async function resolveDatasource(value: string): Promise<{ id: string; name: string; raw: JsonObject }> {
   const rows = await datasourceRows();
-  const matches = rows.filter((row) => string(row.id) === value || string(row.name) === value);
+  const idMatches = rows.filter((row) => string(row.id) === value);
+  if (idMatches.length === 1) {
+    const row = idMatches[0]!;
+    return { id: string(row.id), name: string(row.name), raw: row };
+  }
+  if (idMatches.length > 1) {
+    throw new EditorClientError("upstream", `Datasource id '${value}' is duplicated by the Editor API.`);
+  }
+  const matches = rows.filter((row) => string(row.name) === value);
   if (matches.length !== 1) {
     throw new EditorClientError(
       matches.length === 0 ? "validation" : "upstream",

@@ -115,6 +115,31 @@ test("datasources_list resolves SSO once and calls the native API with userId", 
   }
 });
 
+test("datasource id remains unambiguous when the account has duplicate display names", async () => {
+  testCredential();
+  const restore = installFetch(async (url) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") {
+      return ok([{ id: "ds-1", name: "HiQ" }, { id: "ds-2", name: "HiQ" }]);
+    }
+    if (url.pathname === "/api/dataset/dataWorkspace/getWorkspacePage") {
+      return ok([], { total: 0, page: 1, size: 20, totalPageNum: 0 });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("processes_list", {
+      datasource: "ds-2", page: 1, page_size: 20, scope: "mine",
+    });
+    assert.deepEqual(result.data.datasource, { id: "ds-2", name: "HiQ" });
+    await assert.rejects(() => executeCommand("processes_list", {
+      datasource: "HiQ", page: 1, page_size: 20, scope: "mine",
+    }), /ambiguous/);
+  } finally {
+    restore();
+  }
+});
+
 test("process_show aggregates three detail sections and all core cards", async () => {
   testCredential();
   const restore = installFetch(async (url, init) => {
