@@ -103,7 +103,7 @@ The stable domain surface is:
 | `process-show` | Combine base info, management info, cores, and all item cards. |
 | `flows-search` | Normalize native flow results into stable id/type/unit fields. |
 | `product-categories-search` | Search CPC rows and read each category back to verify its code. |
-| `upr-preflight` | Inspect the workbook and resolve datasource, data-item and reference-flow prerequisites without creating a dataset process. |
+| `upr-preflight` | Read-only workbook/datasource/identity preflight; reports resources that `upr-import` will create and never writes any Editor resource. |
 | `upr-import` | Parse workbook, derive canonical process name, ensure tenant data-item identities and the reference product flow, import through the native API, require its committed `processId`, and read that process back. |
 | `process-trial-calculate` | Validate current process, run check + calculation, and poll readback until calculated. |
 | `process-submit-review` | Require calculated state, submit review, and confirm workflow state. |
