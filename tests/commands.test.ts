@@ -81,6 +81,7 @@ test("command catalog is explicit and agent-oriented", () => {
     "process_show",
     "flows_search",
     "product_categories_search",
+    "upr_preflight",
     "upr_import",
     "process_trial_calculate",
     "process_submit_review",
@@ -229,6 +230,41 @@ test("upr_import uses the committed process identity returned by the native API"
       }),
       /readback is missing data-item identity/,
     );
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("upr_preflight resolves every import prerequisite without creating a dataset process", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes([["电力", "能源", "kWh"]]));
+  const calls: string[] = [];
+  const restore = installFetch(async (url, init) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    const item = existingDataItem(url, init);
+    if (item) return item;
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
+      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", categoryId: "category-1", unitId: "unit-1", unitName: "kg" }], { total: 1 });
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/attribute/list") return compatibleReferenceProperty();
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("upr_preflight", {
+      file_path: path,
+      datasource: "ds-1",
+      product_category_code: "123",
+    });
+    assert.equal(result.data.process_created, false);
+    assert.deepEqual(result.data.datasource, { id: "ds-1", name: "HiQ" });
+    assert.equal(result.data.reference_flow_id, "flow-1");
+    assert.deepEqual((result.data.workbook as Record<string, unknown>).data_item_names, ["电力", "聚丙烯"]);
+    assert.equal(calls.some((pathname) => pathname.includes("excelImportUpr")), false);
   } finally {
     restore();
     await rm(work, { recursive: true, force: true });
