@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { apiGet, apiPost, apiPostMultipart, resolveEditorIdentity } from "./apiClient.js";
-import { ensureDataItems } from "./dataItems.js";
+import { ensureDataItems, inspectDataItems } from "./dataItems.js";
 import { readBytes } from "./files.js";
 import { EditorClientError } from "./types.js";
 import { inspectUprWorkbook, type UprWorkbookIdentity } from "./workbook.js";
@@ -357,34 +357,10 @@ async function ensureReferenceProduct(
   workbook: UprWorkbookIdentity,
   categoryCode: string,
 ): Promise<{ flowId: string; created: boolean }> {
-  const existing = await findReferenceProduct(workbook);
-  if (existing) {
-    await assertCompatibleReferenceFlow(existing, workbook);
-    return { flowId: string(existing.id), created: false };
-  }
-
-  const categoryResult = await productCategories(categoryCode, 50);
-  const categories = array(categoryResult.data.categories).filter((row) => string(row.code) === categoryCode);
-  if (categories.length !== 1) {
-    throw new EditorClientError("validation", `CPC category code '${categoryCode}' did not resolve uniquely.`);
-  }
-  const propertiesResponse = await apiGet<unknown>("/basicInfo/flow/manage/properties/list", {
-    name: `Flow property for ${workbook.referenceUnit}`,
-    page: 1,
-    size: 100,
-  });
-  const properties = array(propertiesResponse.data).filter((row) =>
-    string(row.unitName) === workbook.referenceUnit
-      && string(row.name ?? row.flowName) === `Flow property for ${workbook.referenceUnit}`,
-  );
-  if (properties.length !== 1) {
-    throw new EditorClientError(
-      "validation",
-      `Reference flow property for unit '${workbook.referenceUnit}' did not resolve uniquely.`,
-    );
-  }
-  const category = categories[0]!;
-  const property = properties[0]!;
+  const plan = await referenceProductPlan(workbook, categoryCode);
+  if (plan.existing) return { flowId: string(plan.existing.id), created: false };
+  const category = plan.category!;
+  const property = plan.property!;
   const body = {
     name: workbook.referenceProduct,
     variableName: "",
@@ -394,7 +370,7 @@ async function ensureReferenceProduct(
     cas: "",
     unitId: string(property.unitId),
     synonyms: "",
-    description: "Created by hiq-editor UPR import preflight.",
+    description: "Created by hiq-editor UPR import.",
     flowType: "2",
     attributeInfos: [{
       flowName: string(property.name ?? property.flowName),
@@ -427,6 +403,38 @@ async function ensureReferenceProduct(
   return { flowId: string(created.id), created: true };
 }
 
+async function referenceProductPlan(
+  workbook: UprWorkbookIdentity,
+  categoryCode: string,
+): Promise<{ existing?: JsonObject; category?: JsonObject; property?: JsonObject }> {
+  const existing = await findReferenceProduct(workbook);
+  if (existing) {
+    await assertCompatibleReferenceFlow(existing, workbook);
+    return { existing };
+  }
+  const categoryResult = await productCategories(categoryCode, 50);
+  const categories = array(categoryResult.data.categories).filter((row) => string(row.code) === categoryCode);
+  if (categories.length !== 1) {
+    throw new EditorClientError("validation", `CPC category code '${categoryCode}' did not resolve uniquely.`);
+  }
+  const propertiesResponse = await apiGet<unknown>("/basicInfo/flow/manage/properties/list", {
+    name: `Flow property for ${workbook.referenceUnit}`,
+    page: 1,
+    size: 100,
+  });
+  const properties = array(propertiesResponse.data).filter((row) =>
+    string(row.unitName) === workbook.referenceUnit
+      && string(row.name ?? row.flowName) === `Flow property for ${workbook.referenceUnit}`,
+  );
+  if (properties.length !== 1) {
+    throw new EditorClientError(
+      "validation",
+      `Reference flow property for unit '${workbook.referenceUnit}' did not resolve uniquely.`,
+    );
+  }
+  return { category: categories[0]!, property: properties[0]! };
+}
+
 interface UprPreflightInput {
   file_path: string;
   datasource: string;
@@ -449,29 +457,37 @@ async function prepareUprImport(input: UprPreflightInput): Promise<{
 }
 
 async function preflightUpr(input: UprPreflightInput): Promise<CommandResult> {
-  const prepared = await prepareUprImport(input);
-  const dataItemsCreated = prepared.dataItems.filter((item) => item.created).length;
+  const bytes = await readBytes(input.file_path);
+  const workbook = await inspectUprWorkbook(bytes);
+  const [datasource, dataItems, referencePlan] = await Promise.all([
+    resolveDatasource(input.datasource),
+    inspectDataItems(workbook.dataItemNames),
+    referenceProductPlan(workbook, input.product_category_code),
+  ]);
+  const missingDataItems = dataItems.filter((item) => !item.exists).length;
+  const referenceFlowId = referencePlan.existing ? string(referencePlan.existing.id) : null;
   return {
     text: [
-      "UPR preflight passed; no dataset process was created.",
-      `Name: ${prepared.workbook.processName}`,
-      `Datasource: ${prepared.datasource.name} (${prepared.datasource.id})`,
-      `Reference flow: ${prepared.referenceFlow.flowId}${prepared.referenceFlow.created ? " (created)" : " (reused)"}`,
-      `Data items: ${prepared.dataItems.length} resolved (${dataItemsCreated} created)`,
+      "UPR read-only preflight passed; no Editor resource was created.",
+      `Name: ${workbook.processName}`,
+      `Datasource: ${datasource.name} (${datasource.id})`,
+      `Reference flow: ${referenceFlowId ?? "will be created by upr_import"}`,
+      `Data items: ${dataItems.length - missingDataItems} existing; ${missingDataItems} will be created by upr_import`,
     ].join("\n"),
     data: {
       process_created: false,
+      external_writes: false,
       workbook: {
-        process_name: prepared.workbook.processName,
-        reference_product: prepared.workbook.referenceProduct,
-        reference_unit: prepared.workbook.referenceUnit,
-        data_item_names: prepared.workbook.dataItemNames,
+        process_name: workbook.processName,
+        reference_product: workbook.referenceProduct,
+        reference_unit: workbook.referenceUnit,
+        data_item_names: workbook.dataItemNames,
       },
-      datasource: { id: prepared.datasource.id, name: prepared.datasource.name },
-      reference_flow_id: prepared.referenceFlow.flowId,
-      reference_flow_created: prepared.referenceFlow.created,
-      data_items: prepared.dataItems,
-      data_items_created: dataItemsCreated,
+      datasource: { id: datasource.id, name: datasource.name },
+      reference_flow_id: referenceFlowId,
+      reference_flow_exists: referenceFlowId !== null,
+      data_items: dataItems,
+      data_items_missing: missingDataItems,
     },
   };
 }

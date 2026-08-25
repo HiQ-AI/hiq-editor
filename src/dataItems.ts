@@ -13,6 +13,12 @@ export interface ResolvedDataItem {
   created: boolean;
 }
 
+export interface InspectedDataItem {
+  id: string | null;
+  name: string;
+  exists: boolean;
+}
+
 function object(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonObject
@@ -72,15 +78,23 @@ function normalizeNames(names: readonly string[]): string[] {
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
 }
 
-export async function ensureDataItems(rawNames: readonly string[]): Promise<ResolvedDataItem[]> {
+export async function inspectDataItems(rawNames: readonly string[]): Promise<InspectedDataItem[]> {
   const names = normalizeNames(rawNames);
   if (names.length === 0) {
     throw new EditorClientError("validation", "UPR import requires at least one data item.");
   }
 
-  const existing = await mapBounded(names, async (name) => ({ name, row: await exactDataItem(name) }));
-  return mapBounded(existing, async ({ name, row }) => {
-    if (row) return { id: text(row.id), name, created: false };
+  return mapBounded(names, async (name) => {
+    const row = await exactDataItem(name);
+    return { id: row ? text(row.id) : null, name, exists: Boolean(row) };
+  });
+}
+
+export async function ensureDataItems(rawNames: readonly string[]): Promise<ResolvedDataItem[]> {
+  const inspected = await inspectDataItems(rawNames);
+
+  return mapBounded(inspected, async ({ id, name, exists }) => {
+    if (exists && id) return { id, name, created: false };
     let createError: unknown;
     try {
       await apiPost<unknown>("/dataHouseCommon/addRemoteDataItem", { name });

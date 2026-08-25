@@ -261,9 +261,51 @@ test("upr_preflight resolves every import prerequisite without creating a datase
       product_category_code: "123",
     });
     assert.equal(result.data.process_created, false);
+    assert.equal(result.data.external_writes, false);
     assert.deepEqual(result.data.datasource, { id: "ds-1", name: "HiQ" });
     assert.equal(result.data.reference_flow_id, "flow-1");
     assert.deepEqual((result.data.workbook as Record<string, unknown>).data_item_names, ["电力", "聚丙烯"]);
+    assert.equal(calls.some((pathname) => pathname.includes("excelImportUpr")), false);
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("upr_preflight reports missing identities without creating them", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes());
+  const calls: string[] = [];
+  const restore = installFetch(async (url) => {
+    calls.push(url.pathname);
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/mElement/getPageElementBykeyword") return ok([], { total: 0 });
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") return ok([], { total: 0 });
+    if (url.pathname === "/api/dataset/categories/getCategoryByCode") return ok([{ id: "category-1", name: "Plastic" }]);
+    if (url.pathname === "/api/dataset/categories/detail/category-1") {
+      return ok({ id: "category-1", categoryCode: "123", name: "Plastic" });
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/properties/list") {
+      return ok([{ id: "property-1", name: "Flow property for kg", unitId: "unit-1", unitName: "kg" }]);
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("upr_preflight", {
+      file_path: path,
+      datasource: "ds-1",
+      product_category_code: "123",
+    });
+    assert.equal(result.data.process_created, false);
+    assert.equal(result.data.external_writes, false);
+    assert.equal(result.data.reference_flow_id, null);
+    assert.equal(result.data.reference_flow_exists, false);
+    assert.equal(result.data.data_items_missing, 1);
+    assert.equal(calls.includes("/api/dataset/dataHouseCommon/addRemoteDataItem"), false);
+    assert.equal(calls.includes("/api/dataset/basicInfo/flow/manage/add"), false);
     assert.equal(calls.some((pathname) => pathname.includes("excelImportUpr")), false);
   } finally {
     restore();
