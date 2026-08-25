@@ -78,6 +78,12 @@ hiq-editor process-show --process-id <id> --json
 hiq-editor flows-search --keyword carbon --flow-type ELEMENTARY_FLOW --json
 hiq-editor product-categories-search --keyword 4912 --json
 
+hiq-editor upr-preflight \
+  --file-path /absolute/path/UPR.xlsx \
+  --datasource GBA \
+  --product-category-code 4912 \
+  --json
+
 hiq-editor upr-import \
   --file-path /absolute/path/UPR.xlsx \
   --datasource GBA \
@@ -97,12 +103,13 @@ The stable domain surface is:
 | `process-show` | Combine base info, management info, cores, and all item cards. |
 | `flows-search` | Normalize native flow results into stable id/type/unit fields. |
 | `product-categories-search` | Search CPC rows and read each category back to verify its code. |
+| `upr-preflight` | Inspect the workbook and resolve datasource, data-item and reference-flow prerequisites without creating a dataset process. |
 | `upr-import` | Parse workbook, derive canonical process name, ensure tenant data-item identities and the reference product flow, import through the native API, require its committed `processId`, and read that process back. |
 | `process-trial-calculate` | Validate current process, run check + calculation, and poll readback until calculated. |
 | `process-submit-review` | Require calculated state, submit review, and confirm workflow state. |
 
 `call <command> --stdin` is available for trusted subprocess hosts that already
-have a typed wrapper. It only accepts the eight commands above; there is no
+have a typed wrapper. It only accepts the nine commands above; there is no
 arbitrary URL, SQL, or tool-name escape hatch.
 
 Before importing, `upr-import` resolves every process-row data-item name with the

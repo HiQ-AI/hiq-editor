@@ -427,17 +427,62 @@ async function ensureReferenceProduct(
   return { flowId: string(created.id), created: true };
 }
 
+interface UprPreflightInput {
+  file_path: string;
+  datasource: string;
+  product_category_code: string;
+}
+
+async function prepareUprImport(input: UprPreflightInput): Promise<{
+  bytes: Buffer;
+  workbook: UprWorkbookIdentity;
+  datasource: { id: string; name: string; raw: JsonObject };
+  dataItems: Awaited<ReturnType<typeof ensureDataItems>>;
+  referenceFlow: { flowId: string; created: boolean };
+}> {
+  const bytes = await readBytes(input.file_path);
+  const workbook = await inspectUprWorkbook(bytes);
+  const datasource = await resolveDatasource(input.datasource);
+  const dataItems = await ensureDataItems(workbook.dataItemNames);
+  const referenceFlow = await ensureReferenceProduct(workbook, input.product_category_code);
+  return { bytes, workbook, datasource, dataItems, referenceFlow };
+}
+
+async function preflightUpr(input: UprPreflightInput): Promise<CommandResult> {
+  const prepared = await prepareUprImport(input);
+  const dataItemsCreated = prepared.dataItems.filter((item) => item.created).length;
+  return {
+    text: [
+      "UPR preflight passed; no dataset process was created.",
+      `Name: ${prepared.workbook.processName}`,
+      `Datasource: ${prepared.datasource.name} (${prepared.datasource.id})`,
+      `Reference flow: ${prepared.referenceFlow.flowId}${prepared.referenceFlow.created ? " (created)" : " (reused)"}`,
+      `Data items: ${prepared.dataItems.length} resolved (${dataItemsCreated} created)`,
+    ].join("\n"),
+    data: {
+      process_created: false,
+      workbook: {
+        process_name: prepared.workbook.processName,
+        reference_product: prepared.workbook.referenceProduct,
+        reference_unit: prepared.workbook.referenceUnit,
+        data_item_names: prepared.workbook.dataItemNames,
+      },
+      datasource: { id: prepared.datasource.id, name: prepared.datasource.name },
+      reference_flow_id: prepared.referenceFlow.flowId,
+      reference_flow_created: prepared.referenceFlow.created,
+      data_items: prepared.dataItems,
+      data_items_created: dataItemsCreated,
+    },
+  };
+}
+
 async function importUpr(input: {
   file_path: string;
   datasource: string;
   product_category_code: string;
   need_desensitize: boolean;
 }): Promise<CommandResult> {
-  const bytes = await readBytes(input.file_path);
-  const workbook = await inspectUprWorkbook(bytes);
-  const datasource = await resolveDatasource(input.datasource);
-  const dataItems = await ensureDataItems(workbook.dataItemNames);
-  const referenceFlow = await ensureReferenceProduct(workbook, input.product_category_code);
+  const { bytes, workbook, datasource, dataItems, referenceFlow } = await prepareUprImport(input);
   const form = new FormData();
   form.set("file", new File([new Uint8Array(bytes)], basename(input.file_path), {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -605,6 +650,17 @@ export const commandDefs: CommandDef[] = [
     },
     readOnly: true,
     run: (input) => productCategories(input.keyword, input.limit),
+  }),
+  defineCommand({
+    name: "upr_preflight",
+    description: "Inspect one UPR workbook and resolve its datasource, data items and reference flow without creating a dataset process.",
+    schema: {
+      file_path: z.string().trim().min(1).max(4_096),
+      datasource: z.string().trim().min(1).max(200),
+      product_category_code: z.string().regex(/^\d{1,5}$/u),
+    },
+    readOnly: false,
+    run: (input) => preflightUpr(input),
   }),
   defineCommand({
     name: "upr_import",
