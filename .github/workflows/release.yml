@@ -14,8 +14,8 @@
 #             in the package's npmjs.com settings.
 #   3. GitHub Release — carries the binaries, checksums and the npm tarball.
 #
-# This package has no out-of-band data asset (it forwards to the editor server
-# at runtime), so a release is just {code (npm + tarball)}.
+# This package has no out-of-band data asset. The CLI calls the Editor native
+# API through APISIX, so a release is just {code (npm + binaries)}.
 name: release
 
 on:
@@ -40,6 +40,9 @@ jobs:
       # npm, not `bun install`: the binaries and the npm package then resolve
       # through the same package-lock.json and cannot drift apart.
       - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm test
+      - run: npm run build
       - run: ./scripts/build-binaries.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -110,9 +113,13 @@ jobs:
         run: |
           curl -fsSL https://download.hiq.earth/cli/hiq-editor/install.sh | sh
           "$HOME/.local/bin/hiq-editor" version
+          "$HOME/.local/bin/hiq-editor" --json list
+          "$HOME/.local/bin/hiq-editor" --json describe upr-import
       - name: install.ps1 (CDN)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           irm https://download.hiq.earth/cli/hiq-editor/install.ps1 | iex
           & "$env:LOCALAPPDATA\Programs\hiq-editor\hiq-editor.exe" version
+          & "$env:LOCALAPPDATA\Programs\hiq-editor\hiq-editor.exe" --json list
+          & "$env:LOCALAPPDATA\Programs\hiq-editor\hiq-editor.exe" --json describe upr-import

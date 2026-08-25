@@ -1,24 +1,18 @@
-/**
- * Per-tool subcommands, generated at runtime from the gateway's tool catalog
- * (remote tools/list + local tools) — no client-side schema duplication to
- * drift. `add_exchange_tool` becomes `hiq-editor add-exchange` with real flags
- * parsed from its input JSON Schema: required props become required options,
- * enums become choices, object/array props accept JSON values.
- */
+/** Generate yargs subcommands from the same command schemas used by call/MCP. */
 import type { Argv, Options } from "yargs";
 
 import { EditorClientError } from "./types.js";
 
-export interface CatalogTool {
+export interface CatalogCommand {
   name: string;
   description?: string;
   inputSchema?: unknown;
-  local: boolean;
+  readOnly?: boolean;
 }
 
-/** `add_exchange_tool` → `add-exchange`, `list_my_processes` → `list-my-processes`. */
-export function toolAlias(name: string): string {
-  return name.replace(/_tool$/, "").replace(/_/g, "-");
+/** `process_trial_calculate` becomes `process-trial-calculate`. */
+export function commandAlias(name: string): string {
+  return name.replace(/_/g, "-");
 }
 
 export interface PropSpec {
@@ -31,8 +25,7 @@ export interface PropSpec {
   json: boolean;
 }
 
-/** Flag help gets the schema description's first sentence, capped — the full
- *  text stays available via `hiq-editor describe <tool>`. */
+/** Keep subcommand help compact; describe prints the full schema. */
 function firstSentence(desc: string | undefined, max = 120): string {
   if (!desc) return "";
   const m = /^(.{1,120}?[.。](?:\s|$))/.exec(desc);
@@ -83,25 +76,23 @@ function parseJsonFlag(flag: string, value: string): unknown {
   }
 }
 
-/** Register one subcommand per catalog tool. On an alias collision the later
- *  tool keeps its native name. */
-export function registerToolCommands(
+/** Register one subcommand per stable domain command. */
+export function registerDomainCommands(
   y: Argv,
-  tools: CatalogTool[],
-  invoke: (toolName: string, args: Record<string, unknown>) => Promise<void>,
+  commands: CatalogCommand[],
+  invoke: (commandName: string, args: Record<string, unknown>) => Promise<void>,
   onError: (err: unknown) => void,
 ): Argv {
   const taken = new Set<string>();
-  for (const t of tools) {
-    const alias = taken.has(toolAlias(t.name)) ? t.name : toolAlias(t.name);
+  for (const t of commands) {
+    const alias = taken.has(commandAlias(t.name)) ? t.name : commandAlias(t.name);
     taken.add(alias);
     const specs = schemaToOptions(t.inputSchema);
     y = y.command(
       alias,
-      firstSentence(t.description) + (t.local ? " (local)" : ""),
+      firstSentence(t.description),
       (yy) => {
-        // A tool arg named `version` collides with yargs' built-in --version —
-        // disable the built-in on this subcommand so the tool arg wins.
+        // A command arg named `version` collides with yargs' built-in flag.
         if (specs.some((sp) => sp.flag === "version")) {
           yy = yy.version(false);
         }

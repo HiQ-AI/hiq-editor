@@ -1,0 +1,318 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import ExcelJS from "exceljs";
+import { resetIdentityCache, unwrapSsoToken } from "../src/apiClient.js";
+import { commandCatalog, executeCommand } from "../src/commands.js";
+import { config } from "../src/config.js";
+import { inspectUprWorkbook } from "../src/workbook.js";
+
+type FetchHandler = (url: URL, init: RequestInit) => Response | Promise<Response>;
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function ok(data: unknown = null, extra: Record<string, unknown> = {}): Response {
+  return json({ success: true, code: "200", message: "成功", data, ...extra });
+}
+
+function installFetch(handler: FetchHandler): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (input, init = {}) => handler(new URL(String(input)), init);
+  return () => { globalThis.fetch = original; };
+}
+
+function sso(): Response {
+  return json({
+    code: 200,
+    data: {
+      user: {
+        id: "user-1",
+        name: "Test User",
+        currentTenant: { id: "tenant-1", name: "Test Tenant" },
+      },
+    },
+  });
+}
+
+function testCredential(kind: "access-token" | "api-key" = "access-token"): void {
+  config.credential = { kind, value: "opaque-credential", source: "env" };
+  resetIdentityCache();
+}
+
+async function workbookBytes(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const basic = workbook.addWorksheet("基本信息");
+  basic.addRow(["产品", "聚丙烯"]);
+  basic.addRow(["技术路线/工艺路径", "悬浮法"]);
+  basic.addRow(["参考产品", "聚丙烯"]);
+  const process = workbook.addWorksheet("P-生产");
+  process.addRow(["数据项名称", "数据项分类", "单位名称"]);
+  process.addRow(["聚丙烯", "产品", "kg"]);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+test("command catalog is explicit and agent-oriented", () => {
+  assert.deepEqual(commandCatalog().map((command) => command.name), [
+    "datasources_list",
+    "processes_list",
+    "process_show",
+    "flows_search",
+    "product_categories_search",
+    "upr_import",
+    "process_trial_calculate",
+    "process_submit_review",
+  ]);
+});
+
+test("Cortex delegation JWT unwraps only its sso_token claim", () => {
+  const payload = Buffer.from(JSON.stringify({ sso_token: "real-token", sub: "user-1" })).toString("base64url");
+  assert.equal(unwrapSsoToken(`eyJ.${payload}.sig`), "real-token");
+  assert.equal(unwrapSsoToken("opaque"), "opaque");
+});
+
+test("workbook inspection derives backend-compatible process identity", async () => {
+  assert.deepEqual(await inspectUprWorkbook(await workbookBytes()), {
+    processName: "聚丙烯,悬浮法",
+    referenceProduct: "聚丙烯",
+    referenceUnit: "kg",
+  });
+});
+
+test("datasources_list resolves SSO once and calls the native API with userId", async () => {
+  testCredential("api-key");
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  const restore = installFetch((url, init) => {
+    calls.push({ url: url.href, headers: new Headers(init.headers) });
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") {
+      return ok([{ id: "ds-1", name: "HiQ", description: "Primary" }]);
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("datasources_list", {});
+    assert.deepEqual(result.data.datasources, [{ id: "ds-1", name: "HiQ", description: "Primary", code: null }]);
+    assert.equal(calls[1]!.headers.get("userId"), "user-1");
+    assert.equal(calls[1]!.headers.get("Authorization"), "opaque-credential");
+    assert.equal(calls[1]!.headers.get("X-API-Key"), "opaque-credential");
+  } finally {
+    restore();
+  }
+});
+
+test("process_show aggregates three detail sections and all core cards", async () => {
+  testCredential();
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/data/getNewDataDetails") {
+      const body = JSON.parse(String(init.body)) as { isShow: string };
+      if (body.isShow === "baseInfo") return ok({ baseInfo: { id: "p-1", name: "PP", statusCode: "process01", isCalculated: 0 } });
+      if (body.isShow === "managerInfo") return ok({ managerInfo: { licenseType: "FREE_ALL" } });
+      return ok({ processData: [{ id: "core-1", name: "Production" }] });
+    }
+    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") {
+      return ok({ products: { records: [{ id: "item-1", elementName: "PP" }], total: 1 } });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("process_show", { process_id: "p-1" });
+    assert.deepEqual(result.data.counts, { cores: 1, items: 1 });
+    assert.equal(result.data.calculated, false);
+    assert.equal(result.data.submitted, false);
+  } finally {
+    restore();
+  }
+});
+
+test("upr_import uses the committed process identity returned by the native API", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes());
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
+      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitId: "unit-1", unitName: "kg" }], { total: 1 });
+    }
+    if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") {
+      assert.ok(init.body instanceof FormData);
+      return ok({ processId: "p-1", processName: "聚丙烯,悬浮法", created: true, hasSensitive: false, items: [] });
+    }
+    if (url.pathname === "/api/dataset/data/getNewDataDetails") {
+      const body = JSON.parse(String(init.body)) as { isShow: string };
+      if (body.isShow === "baseInfo") return ok({ baseInfo: { id: "p-1", name: "聚丙烯,悬浮法", statusCode: "process01", isCalculated: 0 } });
+      if (body.isShow === "managerInfo") return ok({ managerInfo: {} });
+      return ok({ processData: [{ id: "core-1" }] });
+    }
+    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") {
+      return ok({ products: { records: [{ id: "item-1" }], total: 1 } });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("upr_import", {
+      file_path: path,
+      datasource: "HiQ",
+      product_category_code: "123",
+    });
+    assert.equal(result.data.process_id, "p-1");
+    assert.equal(result.data.created, true);
+    assert.equal(result.data.has_sensitive, false);
+    assert.equal(result.data.reference_flow_created, false);
+    assert.match(result.text, /^UPR import completed and read back\./);
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("upr_import creates and confirms a missing reference-product flow", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes());
+  let flowReads = 0;
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
+      flowReads += 1;
+      return flowReads === 1
+        ? ok([], { total: 0 })
+        : ok([{ id: "flow-new", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitId: "unit-1", unitName: "kg" }], { total: 1 });
+    }
+    if (url.pathname === "/api/dataset/categories/getCategoryByCode") return ok([{ id: "category-1", name: "Plastic" }]);
+    if (url.pathname === "/api/dataset/categories/detail/category-1") {
+      return ok({ id: "category-1", categoryCode: "123", name: "Plastic" });
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/properties/list") {
+      return ok([{ id: "property-1", name: "Flow property for kg", unitId: "unit-1", unitName: "kg" }]);
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/add") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      assert.equal(body.name, "聚丙烯");
+      assert.equal(body.flowType, "2");
+      assert.equal(body.category, "category-1");
+      assert.equal(body.unitId, "unit-1");
+      return ok({ id: "flow-new" });
+    }
+    if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") {
+      return ok({ processId: "p-new", processName: "聚丙烯,悬浮法", created: true, hasSensitive: false, items: [] });
+    }
+    if (url.pathname === "/api/dataset/data/getNewDataDetails") {
+      const body = JSON.parse(String(init.body)) as { isShow: string };
+      if (body.isShow === "baseInfo") return ok({ baseInfo: { id: "p-new", name: "聚丙烯,悬浮法", statusCode: "process01", isCalculated: 0 } });
+      if (body.isShow === "managerInfo") return ok({ managerInfo: {} });
+      return ok({ processData: [{ id: "core-1" }] });
+    }
+    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") return ok({ products: { records: [{ id: "item-1" }] } });
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await executeCommand("upr_import", {
+      file_path: path,
+      datasource: "HiQ",
+      product_category_code: "123",
+    });
+    assert.equal(result.data.reference_flow_id, "flow-new");
+    assert.equal(result.data.reference_flow_created, true);
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("upr_import fails closed when the native API omits the committed process id", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes());
+  const restore = installFetch(async (url) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") {
+      return ok([{ id: "ds-1", name: "HiQ" }]);
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
+      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitName: "kg" }], { total: 1 });
+    }
+    if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") return ok();
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await assert.rejects(
+      () => executeCommand("upr_import", {
+        file_path: path,
+        datasource: "HiQ",
+        product_category_code: "123",
+      }),
+      /without returning data\.processId/,
+    );
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("trial calculation and review submission are confirmed by native readback", async () => {
+  testCredential();
+  let calculated = false;
+  let submitted = false;
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/data/getNewDataDetails") {
+      const body = JSON.parse(String(init.body)) as { isShow: string };
+      if (body.isShow === "baseInfo") return ok({ baseInfo: {
+        id: "p-1", name: "PP", statusCode: submitted ? "process02" : "process01", isCalculated: calculated ? 1 : 0,
+      } });
+      if (body.isShow === "managerInfo") return ok({ managerInfo: {} });
+      return ok({ processData: [{ id: "core-1" }] });
+    }
+    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") return ok({ products: { records: [{ id: "item-1" }] } });
+    if (url.pathname === "/api/dataset/calculation/check") return ok();
+    if (url.pathname === "/api/dataset/calculation/add") { calculated = true; return ok(); }
+    if (url.pathname === "/api/dataset/approval/submit") { submitted = true; return ok(); }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const calculation = await executeCommand("process_trial_calculate", { process_id: "p-1" });
+    assert.equal(calculation.data.calculated, true);
+    const review = await executeCommand("process_submit_review", { process_id: "p-1" });
+    assert.equal(review.data.submitted, true);
+  } finally {
+    restore();
+  }
+});
+
+test("unknown and extra arguments fail closed", async () => {
+  await assert.rejects(() => executeCommand("missing", {}), /Unknown Editor command/);
+  await assert.rejects(
+    () => executeCommand("process_show", { process_id: "p-1", sql: "select 1" }),
+    /Unrecognized key/,
+  );
+  await assert.rejects(
+    () => executeCommand("flows_search", { keyword: "water" }),
+    /flow_type: Required/,
+  );
+});
+
+test("native success=false envelopes fail closed even with code 200", async () => {
+  testCredential();
+  const restore = installFetch((url) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") {
+      return json({ success: false, code: "200", message: "permission denied" });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await assert.rejects(() => executeCommand("datasources_list", {}), /permission denied/);
+  } finally {
+    restore();
+  }
+});

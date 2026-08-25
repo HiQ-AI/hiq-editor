@@ -1,7 +1,7 @@
 {
   "name": "@hiq-ai/hiq-editor",
-  "version": "0.9.7",
-  "description": "HiQ LCA dataset editor client — the `hiq-editor` CLI (schema-driven subcommands + whole-UPR `import` with checkpoint/resume) and a stdio MCP gateway (`hiq-editor-mcp`) that re-exposes the editor server's tools, plus local UPR-template / file tools.",
+  "version": "0.10.0",
+  "description": "HiQ LCA dataset editor client — an agent-oriented CLI over the native Editor API, with an optional stdio MCP adapter.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -13,9 +13,9 @@
   },
   "exports": {
     "./mcp": "./dist/server.js",
-    "./tools": {
-      "import": "./dist/tools/index.js",
-      "types": "./dist/tools/index.d.ts"
+    "./commands": {
+      "import": "./dist/commands.js",
+      "types": "./dist/commands.d.ts"
     },
     "./package.json": "./package.json"
   },
@@ -35,8 +35,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "exceljs": "^4.4.0",
     "qrcode-terminal": "^0.12.0",
-    "yargs": "^18.0.0"
+    "yargs": "^18.0.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -44,6 +47,11 @@
     "@types/yargs": "^17.0.32",
     "tsx": "^4.20.0",
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   },
   "repository": {
     "type": "git",
