@@ -5,12 +5,16 @@
  * with no package.json next to it, so reading it at runtime is not an option.
  * Runs from `prebuild`, so the literal can never drift from the manifest.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+
+// TypeScript does not delete outputs for removed/renamed source files. A clean
+// dist prevents obsolete commands from leaking into the npm package.
+rmSync(join(root, "dist"), { recursive: true, force: true });
 
 writeFileSync(
   join(root, "src", "version.ts"),

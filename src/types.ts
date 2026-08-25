@@ -1,12 +1,8 @@
 /**
- * Shared types for the editor MCP gateway.
- *
- * The gateway re-exposes the remote server's tools dynamically (their schemas
- * come from the remote tools/list), so there is no local per-tool definition
- * for business tools. The only local tool defs live in tools/local.ts.
+ * Shared error types for the Editor CLI and its optional MCP adapter.
  */
 
-/** Error raised by the gateway (config / transport / validation) or relayed from the server. */
+/** Error raised by local validation/transport or relayed from Editor/SSO. */
 export class EditorClientError extends Error {
   constructor(
     public readonly kind: "config" | "validation" | "transport" | "upstream",
