@@ -97,13 +97,19 @@ The stable domain surface is:
 | `process-show` | Combine base info, management info, cores, and all item cards. |
 | `flows-search` | Normalize native flow results into stable id/type/unit fields. |
 | `product-categories-search` | Search CPC rows and read each category back to verify its code. |
-| `upr-import` | Parse workbook, derive canonical process name, ensure the reference product flow, import through the native API, require its committed `processId`, and read that process back. |
+| `upr-import` | Parse workbook, derive canonical process name, ensure tenant data-item identities and the reference product flow, import through the native API, require its committed `processId`, and read that process back. |
 | `process-trial-calculate` | Validate current process, run check + calculation, and poll readback until calculated. |
 | `process-submit-review` | Require calculated state, submit review, and confirm workflow state. |
 
 `call <command> --stdin` is available for trusted subprocess hosts that already
 have a typed wrapper. It only accepts the eight commands above; there is no
 arbitrary URL, SQL, or tool-name escape hatch.
+
+Before importing, `upr-import` resolves every process-row data-item name with the
+tenant-scoped exact-match API. Missing items are created through the Editor's native
+data-item endpoint and then read back; duplicate names, unconfirmed creation, or an
+import readback with a blank `elementId` stop the command. This keeps catalog writes
+behind the fixed command instead of exposing them as an agent-controlled primitive.
 
 `upr-import` fails closed unless the native import response contains
 `data.processId`. It never infers a new dataset from names, timestamps, or a

@@ -21,15 +21,16 @@ const NAME_FIELDS: readonly (readonly string[])[] = [
 ];
 
 const REFERENCE_PRODUCT_FIELDS = new Set(["参考产品", "Reference product"]);
-const ITEM_NAME_FIELDS = new Set(["数据项名称", "Data item name"]);
-const ITEM_CATEGORY_FIELDS = new Set(["数据项分类", "Data item classification"]);
-const UNIT_FIELDS = new Set(["单位名称", "Unit name"]);
+const ITEM_NAME_FIELDS = new Set(["数据项名称", "Data item name", "Material name"]);
+const ITEM_CATEGORY_FIELDS = new Set(["数据项分类", "Data item classification", "Exchange type"]);
+const UNIT_FIELDS = new Set(["单位名称", "Unit name", "Unit"]);
 const PRODUCT_VALUES = new Set(["产品", "Product"]);
 
 export interface UprWorkbookIdentity {
   processName: string;
   referenceProduct: string;
   referenceUnit: string;
+  dataItemNames: string[];
 }
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -82,6 +83,7 @@ export async function inspectUprWorkbook(bytes: Uint8Array): Promise<UprWorkbook
   const referenceProduct = clean(referenceLabel ? values.get(referenceLabel) ?? "" : "", "UPR reference product", 80);
 
   const units = new Set<string>();
+  const dataItemNames = new Set<string>();
   for (const sheet of workbook.worksheets.filter((item) => item.name.toUpperCase().startsWith("P-"))) {
     let headerRow = 0;
     let nameColumn = 0;
@@ -100,8 +102,10 @@ export async function inspectUprWorkbook(bytes: Uint8Array): Promise<UprWorkbook
     if (!headerRow) continue;
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber <= headerRow) return;
+      const itemName = cellText(row.getCell(nameColumn));
+      if (itemName) dataItemNames.add(clean(itemName, "UPR data-item name", 255));
       if (!PRODUCT_VALUES.has(cellText(row.getCell(categoryColumn)))) return;
-      if (cellText(row.getCell(nameColumn)) !== referenceProduct) return;
+      if (itemName !== referenceProduct) return;
       units.add(clean(cellText(row.getCell(unitColumn)), "UPR reference-product unit", 100));
     });
   }
@@ -113,5 +117,13 @@ export async function inspectUprWorkbook(bytes: Uint8Array): Promise<UprWorkbook
         : `Reference product '${referenceProduct}' has multiple units: ${[...units].join(", ")}.`,
     );
   }
-  return { processName, referenceProduct, referenceUnit: [...units][0]! };
+  if (dataItemNames.size === 0) {
+    throw new EditorClientError("validation", "UPR workbook does not contain any process data items.");
+  }
+  return {
+    processName,
+    referenceProduct,
+    referenceUnit: [...units][0]!,
+    dataItemNames: [...dataItemNames].sort((left, right) => left.localeCompare(right)),
+  };
 }

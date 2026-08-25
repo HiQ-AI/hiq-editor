@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { apiGet, apiPost, apiPostMultipart, resolveEditorIdentity } from "./apiClient.js";
+import { ensureDataItems } from "./dataItems.js";
 import { readBytes } from "./files.js";
 import { EditorClientError } from "./types.js";
 import { inspectUprWorkbook, type UprWorkbookIdentity } from "./workbook.js";
@@ -435,6 +436,7 @@ async function importUpr(input: {
   const bytes = await readBytes(input.file_path);
   const workbook = await inspectUprWorkbook(bytes);
   const datasource = await resolveDatasource(input.datasource);
+  const dataItems = await ensureDataItems(workbook.dataItemNames);
   const referenceFlow = await ensureReferenceProduct(workbook, input.product_category_code);
   const form = new FormData();
   form.set("file", new File([new Uint8Array(bytes)], basename(input.file_path), {
@@ -455,6 +457,18 @@ async function importUpr(input: {
     );
   }
   const detail = await showProcess(processId);
+  const readbackItems = array(detail.data.items);
+  const unresolved = workbook.dataItemNames.filter((name) => !readbackItems.some((item) =>
+    string(item.elementName ?? item.name) === name && string(item.elementId),
+  ));
+  if (unresolved.length) {
+    throw new EditorClientError(
+      "upstream",
+      `UPR import readback is missing data-item identity for: ${unresolved.join(", ")}.`,
+      "data_item_readback_missing",
+    );
+  }
+  const dataItemsCreated = dataItems.filter((item) => item.created).length;
   return {
     text: [
       "UPR import completed and read back.",
@@ -462,6 +476,7 @@ async function importUpr(input: {
       `Name: ${workbook.processName}`,
       `Datasource: ${datasource.name} (${datasource.id})`,
       `Reference flow: ${referenceFlow.flowId}${referenceFlow.created ? " (created)" : " (reused)"}`,
+      `Data items: ${dataItems.length} resolved (${dataItemsCreated} created)`,
       `Cores: ${String(object(detail.data.counts)?.cores ?? 0)}`,
       `Items: ${String(object(detail.data.counts)?.items ?? 0)}`,
     ].join("\n"),
@@ -475,6 +490,8 @@ async function importUpr(input: {
       reference_product: workbook.referenceProduct,
       reference_flow_id: referenceFlow.flowId,
       reference_flow_created: referenceFlow.created,
+      data_items: dataItems,
+      data_items_created: dataItemsCreated,
       readback: detail.data,
     },
   };

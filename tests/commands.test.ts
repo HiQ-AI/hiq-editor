@@ -7,6 +7,7 @@ import ExcelJS from "exceljs";
 import { resetIdentityCache, unwrapSsoToken } from "../src/apiClient.js";
 import { commandCatalog, executeCommand } from "../src/commands.js";
 import { config } from "../src/config.js";
+import { ensureDataItems } from "../src/dataItems.js";
 import { inspectUprWorkbook } from "../src/workbook.js";
 
 type FetchHandler = (url: URL, init: RequestInit) => Response | Promise<Response>;
@@ -54,7 +55,13 @@ function compatibleReferenceProperty(): Response {
   }]);
 }
 
-async function workbookBytes(): Promise<Buffer> {
+function existingDataItem(url: URL, init: RequestInit): Response | undefined {
+  if (url.pathname !== "/api/dataset/mElement/getPageElementBykeyword") return undefined;
+  const body = JSON.parse(String(init.body)) as { keyword: string };
+  return ok([{ id: `element-${body.keyword}`, name: body.keyword }], { total: 1 });
+}
+
+async function workbookBytes(extraRows: string[][] = []): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const basic = workbook.addWorksheet("基本信息");
   basic.addRow(["产品", "聚丙烯"]);
@@ -63,6 +70,7 @@ async function workbookBytes(): Promise<Buffer> {
   const process = workbook.addWorksheet("P-生产");
   process.addRow(["数据项名称", "数据项分类", "单位名称"]);
   process.addRow(["聚丙烯", "产品", "kg"]);
+  for (const row of extraRows) process.addRow(row);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -90,6 +98,7 @@ test("workbook inspection derives backend-compatible process identity", async ()
     processName: "聚丙烯,悬浮法",
     referenceProduct: "聚丙烯",
     referenceUnit: "kg",
+    dataItemNames: ["聚丙烯"],
   });
 });
 
@@ -170,8 +179,11 @@ test("upr_import uses the committed process identity returned by the native API"
   const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
   const path = join(work, "upr.xlsx");
   await writeFile(path, await workbookBytes());
+  let includeDataItemIdentity = true;
   const restore = installFetch(async (url, init) => {
     if (url.pathname === "/api/sso/user/info/current") return sso();
+    const item = existingDataItem(url, init);
+    if (item) return item;
     if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
     if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
       return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", categoryId: "category-1", unitId: "unit-1", unitName: "kg" }], { total: 1 });
@@ -188,7 +200,11 @@ test("upr_import uses the committed process identity returned by the native API"
       return ok({ processData: [{ id: "core-1" }] });
     }
     if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") {
-      return ok({ products: { records: [{ id: "item-1" }], total: 1 } });
+      return ok({ products: { records: [{
+        id: "item-1",
+        elementName: "聚丙烯",
+        ...(includeDataItemIdentity ? { elementId: "element-聚丙烯" } : {}),
+      }], total: 1 } });
     }
     throw new Error(`unexpected ${url}`);
   });
@@ -202,10 +218,87 @@ test("upr_import uses the committed process identity returned by the native API"
     assert.equal(result.data.created, true);
     assert.equal(result.data.has_sensitive, false);
     assert.equal(result.data.reference_flow_created, false);
+    assert.equal(result.data.data_items_created, 0);
     assert.match(result.text, /^UPR import completed and read back\./);
+    includeDataItemIdentity = false;
+    await assert.rejects(
+      () => executeCommand("upr_import", {
+        file_path: path,
+        datasource: "HiQ",
+        product_category_code: "123",
+      }),
+      /readback is missing data-item identity/,
+    );
   } finally {
     restore();
     await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("data-item preflight reuses existing rows and creates each missing normalized name once", async () => {
+  testCredential();
+  const persisted = new Map([["已有物料", "element-existing"]]);
+  const creates: string[] = [];
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/mElement/getPageElementBykeyword") {
+      const body = JSON.parse(String(init.body)) as { keyword: string };
+      const id = persisted.get(body.keyword);
+      return ok(id ? [{ id, name: body.keyword }] : [], { total: id ? 1 : 0 });
+    }
+    if (url.pathname === "/api/dataset/dataHouseCommon/addRemoteDataItem") {
+      const body = JSON.parse(String(init.body)) as { name: string };
+      creates.push(body.name);
+      persisted.set(body.name, `element-${body.name}`);
+      return ok();
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const result = await ensureDataItems([" 新物料 ", "已有物料", "新物料"]);
+    assert.deepEqual(new Set(result.map((item) => item.name)), new Set(["已有物料", "新物料"]));
+    assert.deepEqual(creates, ["新物料"]);
+    assert.equal(result.find((item) => item.name === "已有物料")?.created, false);
+    assert.equal(result.find((item) => item.name === "新物料")?.created, true);
+  } finally {
+    restore();
+  }
+});
+
+test("data-item preflight accepts a concurrent creator only after exact readback", async () => {
+  testCredential();
+  let persisted = false;
+  const restore = installFetch(async (url, init) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/mElement/getPageElementBykeyword") {
+      return ok(persisted ? [{ id: "element-winner", name: "并发物料" }] : [], { total: persisted ? 1 : 0 });
+    }
+    if (url.pathname === "/api/dataset/dataHouseCommon/addRemoteDataItem") {
+      persisted = true;
+      return json({ success: false, code: "409", message: "already exists" }, 409);
+    }
+    throw new Error(`unexpected ${url} ${String(init.body)}`);
+  });
+  try {
+    assert.deepEqual(await ensureDataItems(["并发物料"]), [{ id: "element-winner", name: "并发物料", created: false }]);
+  } finally {
+    restore();
+  }
+});
+
+test("data-item preflight fails closed on duplicate exact identities", async () => {
+  testCredential();
+  const restore = installFetch(async (url) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/mElement/getPageElementBykeyword") {
+      return ok([{ id: "a", name: "重复物料" }, { id: "b", name: "重复物料" }], { total: 2 });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await assert.rejects(() => ensureDataItems(["重复物料"]), /is not unique/);
+  } finally {
+    restore();
   }
 });
 
@@ -217,6 +310,8 @@ test("upr_import creates and confirms a missing reference-product flow", async (
   let flowReads = 0;
   const restore = installFetch(async (url, init) => {
     if (url.pathname === "/api/sso/user/info/current") return sso();
+    const item = existingDataItem(url, init);
+    if (item) return item;
     if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
     if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
       flowReads += 1;
@@ -249,7 +344,9 @@ test("upr_import creates and confirms a missing reference-product flow", async (
       if (body.isShow === "managerInfo") return ok({ managerInfo: {} });
       return ok({ processData: [{ id: "core-1" }] });
     }
-    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") return ok({ products: { records: [{ id: "item-1" }] } });
+    if (url.pathname === "/api/dataset/process/getProcessDataCardsByCore") {
+      return ok({ products: { records: [{ id: "item-1", elementId: "element-聚丙烯", elementName: "聚丙烯" }] } });
+    }
     throw new Error(`unexpected ${url}`);
   });
   try {
@@ -271,8 +368,10 @@ test("upr_import fails closed when the native API omits the committed process id
   const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
   const path = join(work, "upr.xlsx");
   await writeFile(path, await workbookBytes());
-  const restore = installFetch(async (url) => {
+  const restore = installFetch(async (url, init) => {
     if (url.pathname === "/api/sso/user/info/current") return sso();
+    const item = existingDataItem(url, init);
+    if (item) return item;
     if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") {
       return ok([{ id: "ds-1", name: "HiQ" }]);
     }
@@ -303,8 +402,10 @@ test("upr_import rejects a same-name reference flow with an incompatible referen
   const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
   const path = join(work, "upr.xlsx");
   await writeFile(path, await workbookBytes());
-  const restore = installFetch(async (url) => {
+  const restore = installFetch(async (url, init) => {
     if (url.pathname === "/api/sso/user/info/current") return sso();
+    const item = existingDataItem(url, init);
+    if (item) return item;
     if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
     if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
       return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitName: "kg" }], { total: 1 });
