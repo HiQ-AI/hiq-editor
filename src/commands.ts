@@ -296,10 +296,42 @@ async function productCategories(keyword: string, limit: number): Promise<Comman
   };
 }
 
-async function ensureReferenceProduct(
+async function assertCompatibleReferenceFlow(
+  flow: JsonObject,
   workbook: UprWorkbookIdentity,
-  categoryCode: string,
-): Promise<{ flowId: string; created: boolean }> {
+): Promise<void> {
+  if (string(flow.type) !== "PRODUCT_FLOW") {
+    throw new EditorClientError(
+      "validation",
+      `Existing flow '${workbook.referenceProduct}' has type '${string(flow.type)}', not PRODUCT_FLOW.`,
+    );
+  }
+  if (string(flow.unit) !== workbook.referenceUnit) {
+    throw new EditorClientError(
+      "validation",
+      `Existing reference flow '${workbook.referenceProduct}' uses unit '${string(flow.unit)}', workbook uses '${workbook.referenceUnit}'.`,
+    );
+  }
+  const response = await apiGet<unknown>("/basicInfo/flow/manage/attribute/list", {
+    flowId: string(flow.id),
+  });
+  const references = array(response.data).filter((row) => row.isReferenceFlowProperty === true);
+  if (references.length !== 1) {
+    throw new EditorClientError(
+      "validation",
+      `Existing reference flow '${workbook.referenceProduct}' does not have exactly one reference flow property.`,
+    );
+  }
+  const reference = references[0]!;
+  if (string(reference.unitName) !== workbook.referenceUnit || Number(reference.val) !== 1) {
+    throw new EditorClientError(
+      "validation",
+      `Existing reference flow '${workbook.referenceProduct}' has an incompatible reference property.`,
+    );
+  }
+}
+
+async function findReferenceProduct(workbook: UprWorkbookIdentity): Promise<JsonObject | undefined> {
   const found = await searchFlows({
     keyword: workbook.referenceProduct,
     flow_type: "PRODUCT_FLOW",
@@ -309,15 +341,17 @@ async function ensureReferenceProduct(
   if (exact.length > 1) {
     throw new EditorClientError("upstream", `Multiple PRODUCT_FLOW rows have the exact name '${workbook.referenceProduct}'.`);
   }
-  if (exact.length === 1) {
-    const row = exact[0]!;
-    if (string(row.unit) !== workbook.referenceUnit) {
-      throw new EditorClientError(
-        "validation",
-        `Existing reference flow '${workbook.referenceProduct}' uses unit '${string(row.unit)}', workbook uses '${workbook.referenceUnit}'.`,
-      );
-    }
-    return { flowId: string(row.id), created: false };
+  return exact[0];
+}
+
+async function ensureReferenceProduct(
+  workbook: UprWorkbookIdentity,
+  categoryCode: string,
+): Promise<{ flowId: string; created: boolean }> {
+  const existing = await findReferenceProduct(workbook);
+  if (existing) {
+    await assertCompatibleReferenceFlow(existing, workbook);
+    return { flowId: string(existing.id), created: false };
   }
 
   const categoryResult = await productCategories(categoryCode, 50);
@@ -342,7 +376,7 @@ async function ensureReferenceProduct(
   }
   const category = categories[0]!;
   const property = properties[0]!;
-  await apiPost<unknown>("/basicInfo/flow/manage/add", {
+  const body = {
     name: workbook.referenceProduct,
     variableName: "",
     category: string(category.id),
@@ -364,15 +398,24 @@ async function ensureReferenceProduct(
       description: "",
       isReferenceFlowProperty: true,
     }],
-  });
-  const readback = await searchFlows({ keyword: workbook.referenceProduct, flow_type: "PRODUCT_FLOW", limit: 100 });
-  const created = array(readback.data.flows).filter((row) =>
-    string(row.name) === workbook.referenceProduct && string(row.unit) === workbook.referenceUnit,
-  );
-  if (created.length !== 1) {
+  };
+  try {
+    await apiPost<unknown>("/basicInfo/flow/manage/add", body);
+  } catch (error) {
+    const winner = await findReferenceProduct(workbook);
+    if (!winner) throw error;
+    await assertCompatibleReferenceFlow(winner, workbook);
+    return { flowId: string(winner.id), created: false };
+  }
+  const created = await findReferenceProduct(workbook);
+  if (!created) {
     throw new EditorClientError("upstream", `Reference flow '${workbook.referenceProduct}' was not confirmed after creation.`);
   }
-  return { flowId: string(created[0]!.id), created: true };
+  await assertCompatibleReferenceFlow(created, workbook);
+  if (string(created.category_id) !== string(category.id)) {
+    throw new EditorClientError("upstream", `Reference flow '${workbook.referenceProduct}' was created with the wrong CPC category.`);
+  }
+  return { flowId: string(created.id), created: true };
 }
 
 async function importUpr(input: {

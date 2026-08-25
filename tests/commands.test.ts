@@ -43,6 +43,17 @@ function testCredential(kind: "access-token" | "api-key" = "access-token"): void
   resetIdentityCache();
 }
 
+function compatibleReferenceProperty(): Response {
+  return ok([{
+    id: "property-1",
+    name: "Flow property for kg",
+    unitId: "unit-1",
+    unitName: "kg",
+    val: 1,
+    isReferenceFlowProperty: true,
+  }]);
+}
+
 async function workbookBytes(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const basic = workbook.addWorksheet("基本信息");
@@ -138,8 +149,9 @@ test("upr_import uses the committed process identity returned by the native API"
     if (url.pathname === "/api/sso/user/info/current") return sso();
     if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
     if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
-      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitId: "unit-1", unitName: "kg" }], { total: 1 });
+      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", categoryId: "category-1", unitId: "unit-1", unitName: "kg" }], { total: 1 });
     }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/attribute/list") return compatibleReferenceProperty();
     if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") {
       assert.ok(init.body instanceof FormData);
       return ok({ processId: "p-1", processName: "聚丙烯,悬浮法", created: true, hasSensitive: false, items: [] });
@@ -185,7 +197,7 @@ test("upr_import creates and confirms a missing reference-product flow", async (
       flowReads += 1;
       return flowReads === 1
         ? ok([], { total: 0 })
-        : ok([{ id: "flow-new", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitId: "unit-1", unitName: "kg" }], { total: 1 });
+        : ok([{ id: "flow-new", name: "聚丙烯", flowType: "PRODUCT_FLOW", categoryId: "category-1", unitId: "unit-1", unitName: "kg" }], { total: 1 });
     }
     if (url.pathname === "/api/dataset/categories/getCategoryByCode") return ok([{ id: "category-1", name: "Plastic" }]);
     if (url.pathname === "/api/dataset/categories/detail/category-1") {
@@ -202,6 +214,7 @@ test("upr_import creates and confirms a missing reference-product flow", async (
       assert.equal(body.unitId, "unit-1");
       return ok({ id: "flow-new" });
     }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/attribute/list") return compatibleReferenceProperty();
     if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") {
       return ok({ processId: "p-new", processName: "聚丙烯,悬浮法", created: true, hasSensitive: false, items: [] });
     }
@@ -241,6 +254,7 @@ test("upr_import fails closed when the native API omits the committed process id
     if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
       return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitName: "kg" }], { total: 1 });
     }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/attribute/list") return compatibleReferenceProperty();
     if (url.pathname === "/api/dataset/process/excelImportUpr/ds-1/0") return ok();
     throw new Error(`unexpected ${url}`);
   });
@@ -252,6 +266,33 @@ test("upr_import fails closed when the native API omits the committed process id
         product_category_code: "123",
       }),
       /without returning data\.processId/,
+    );
+  } finally {
+    restore();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("upr_import rejects a same-name reference flow with an incompatible reference factor", async () => {
+  testCredential();
+  const work = await mkdtemp(join(tmpdir(), "hiq-editor-test-"));
+  const path = join(work, "upr.xlsx");
+  await writeFile(path, await workbookBytes());
+  const restore = installFetch(async (url) => {
+    if (url.pathname === "/api/sso/user/info/current") return sso();
+    if (url.pathname === "/api/dataset/datasourceInfo/getTenantDatasource") return ok([{ id: "ds-1", name: "HiQ" }]);
+    if (url.pathname === "/api/dataset/basicInfo/flow/choose/list") {
+      return ok([{ id: "flow-1", name: "聚丙烯", flowType: "PRODUCT_FLOW", unitName: "kg" }], { total: 1 });
+    }
+    if (url.pathname === "/api/dataset/basicInfo/flow/manage/attribute/list") {
+      return ok([{ unitName: "kg", val: 0.001, isReferenceFlowProperty: true }]);
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await assert.rejects(
+      () => executeCommand("upr_import", { file_path: path, datasource: "HiQ", product_category_code: "123" }),
+      /incompatible reference property/,
     );
   } finally {
     restore();
