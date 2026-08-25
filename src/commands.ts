@@ -675,7 +675,7 @@ export const commandDefs: CommandDef[] = [
       datasource: z.string().trim().min(1).max(200),
       product_category_code: z.string().regex(/^\d{1,5}$/u),
     },
-    readOnly: false,
+    readOnly: true,
     run: (input) => preflightUpr(input),
   }),
   defineCommand({

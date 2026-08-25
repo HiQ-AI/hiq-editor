@@ -75,7 +75,8 @@ async function workbookBytes(extraRows: string[][] = []): Promise<Buffer> {
 }
 
 test("command catalog is explicit and agent-oriented", () => {
-  assert.deepEqual(commandCatalog().map((command) => command.name), [
+  const commands = commandCatalog();
+  assert.deepEqual(commands.map((command) => command.name), [
     "datasources_list",
     "processes_list",
     "process_show",
@@ -86,6 +87,8 @@ test("command catalog is explicit and agent-oriented", () => {
     "process_trial_calculate",
     "process_submit_review",
   ]);
+  assert.equal(commands.find((command) => command.name === "upr_preflight")?.readOnly, true);
+  assert.equal(commands.find((command) => command.name === "upr_import")?.readOnly, false);
 });
 
 test("Cortex delegation JWT unwraps only its sso_token claim", () => {
