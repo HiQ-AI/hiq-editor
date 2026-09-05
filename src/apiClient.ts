@@ -68,8 +68,8 @@ export interface EditorTransport {
   readonly apiUrl: string;
   readonly ssoUserInfoUrl: string;
   readonly credentialKind: EditorCredential["kind"];
-  /** Resolve (once per transport) the SSO identity behind the credential. */
-  identity(): Promise<EditorIdentity>;
+  /** Resolve (once per transport) the SSO identity behind the credential; a caller's signal / timeout bounds the wait. */
+  identity(options?: RequestOptions): Promise<EditorIdentity>;
   get<T>(path: string, params?: QueryParams, options?: RequestOptions): Promise<NativeEnvelope<T>>;
   post<T>(path: string, body: unknown, options?: RequestOptions): Promise<NativeEnvelope<T>>;
   postMultipart<T>(path: string, form: FormData, params?: QueryParams, options?: RequestOptions): Promise<NativeEnvelope<T>>;
@@ -214,8 +214,19 @@ export function createEditorTransport(options: EditorTransportOptions): EditorTr
     return identityPromise;
   }
 
+  /** The (shared, once-per-transport) identity lookup must not outlive the caller's own timeout / signal. */
+  function abortable<V>(promise: Promise<V>, signal: AbortSignal): Promise<V> {
+    if (signal.aborted) return Promise.reject(transportError("HiQ SSO", signal.reason ?? new Error("aborted")));
+    return new Promise<V>((resolve, reject) => {
+      const onAbort = (): void => reject(transportError("HiQ SSO", signal.reason ?? new Error("aborted")));
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
   async function request<T>(path: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<NativeEnvelope<T>> {
-    const who = await identity();
+    const callSignal = combinedSignal(timeoutMs, options.signal, signal);
+    const who = await abortable(identity(), callSignal);
     let response: Response;
     try {
       response = await doFetch(new URL(`${apiUrl}${path}`), {
@@ -227,7 +238,7 @@ export function createEditorTransport(options: EditorTransportOptions): EditorTr
           Accept: "application/json",
           ...init.headers,
         },
-        signal: combinedSignal(timeoutMs, options.signal, signal),
+        signal: callSignal,
       });
     } catch (error) {
       throw transportError(`Editor API ${apiUrl}`, error);
@@ -239,7 +250,7 @@ export function createEditorTransport(options: EditorTransportOptions): EditorTr
     apiUrl,
     ssoUserInfoUrl,
     credentialKind: credential.kind,
-    identity,
+    identity: (opts) => abortable(identity(), combinedSignal(opts?.timeoutMs ?? requestTimeoutMs, options.signal, opts?.signal)),
     get: (path, params, opts) => request(pathWithQuery(path, params), { method: "GET" }, opts?.timeoutMs ?? requestTimeoutMs, opts?.signal),
     post: (path, body, opts) => request(path, {
       method: "POST",
