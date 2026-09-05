@@ -92,16 +92,23 @@ test("api: client-level signal aborts in-flight requests as a transport error; p
 });
 
 test("api: per-call timeout wins over the client default", async () => {
-  const client = createEditorClient({
-    token: "tok",
-    requestTimeoutMs: 60_000,
-    fetch: (_input, init) => new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
-    }),
-  });
-  const started = Date.now();
-  await assert.rejects(client.datasourcesList({ timeoutMs: 50 }), (error: unknown) => error instanceof EditorClientError && error.kind === "transport");
-  assert.ok(Date.now() - started < 5_000);
+  // 真 fetch 在飞时有 socket 句柄撑着事件循环;这里的假 fetch 没有,而 AbortSignal.timeout 的定时器是 unref 的 ——
+  // 不自己 ref 一个句柄,Node 22 会在超时触发前判定事件循环已空,把整条测试链 cancelledByParent(CI 实发;Node 24 本地不触发)。
+  const keepAlive = setTimeout(() => undefined, 10_000);
+  try {
+    const client = createEditorClient({
+      token: "tok",
+      requestTimeoutMs: 60_000,
+      fetch: (_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
+      }),
+    });
+    const started = Date.now();
+    await assert.rejects(client.datasourcesList({ timeoutMs: 50 }), (error: unknown) => error instanceof EditorClientError && error.kind === "transport");
+    assert.ok(Date.now() - started < 5_000);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test("api: input validation, unknown command and error kinds/codes match the CLI contract", async () => {
