@@ -1,6 +1,6 @@
 /** Tenant data-item preflight for deterministic UPR imports. */
 
-import { apiPost } from "./apiClient.js";
+import type { EditorTransport, RequestOptions } from "./apiClient.js";
 import { EditorClientError } from "./types.js";
 
 const LOOKUP_CONCURRENCY = 8;
@@ -47,13 +47,13 @@ async function mapBounded<T, R>(values: readonly T[], fn: (value: T) => Promise<
   return results;
 }
 
-async function exactDataItem(name: string): Promise<JsonObject | undefined> {
-  const response = await apiPost<unknown>("/mElement/getPageElementBykeyword", {
+async function exactDataItem(transport: EditorTransport, name: string, options?: RequestOptions): Promise<JsonObject | undefined> {
+  const response = await transport.post<unknown>("/mElement/getPageElementBykeyword", {
     enableLike: 2,
     keyword: name,
     page: 1,
     size: 2,
-  });
+  }, options);
   const exact = array(response.data).filter((row) => text(row.name) === name && text(row.id));
   if (exact.length > 1 || Number(response.total ?? exact.length) > 1) {
     throw new EditorClientError(
@@ -78,30 +78,30 @@ function normalizeNames(names: readonly string[]): string[] {
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
 }
 
-export async function inspectDataItems(rawNames: readonly string[]): Promise<InspectedDataItem[]> {
+export async function inspectDataItems(transport: EditorTransport, rawNames: readonly string[], options?: RequestOptions): Promise<InspectedDataItem[]> {
   const names = normalizeNames(rawNames);
   if (names.length === 0) {
     throw new EditorClientError("validation", "UPR import requires at least one data item.");
   }
 
   return mapBounded(names, async (name) => {
-    const row = await exactDataItem(name);
+    const row = await exactDataItem(transport, name, options);
     return { id: row ? text(row.id) : null, name, exists: Boolean(row) };
   });
 }
 
-export async function ensureDataItems(rawNames: readonly string[]): Promise<ResolvedDataItem[]> {
-  const inspected = await inspectDataItems(rawNames);
+export async function ensureDataItems(transport: EditorTransport, rawNames: readonly string[], options?: RequestOptions): Promise<ResolvedDataItem[]> {
+  const inspected = await inspectDataItems(transport, rawNames, options);
 
   return mapBounded(inspected, async ({ id, name, exists }) => {
     if (exists && id) return { id, name, created: false };
     let createError: unknown;
     try {
-      await apiPost<unknown>("/dataHouseCommon/addRemoteDataItem", { name });
+      await transport.post<unknown>("/dataHouseCommon/addRemoteDataItem", { name }, options);
     } catch (error) {
       createError = error;
     }
-    const confirmed = await exactDataItem(name);
+    const confirmed = await exactDataItem(transport, name, options);
     if (!confirmed) {
       if (createError) throw createError;
       throw new EditorClientError(

@@ -139,9 +139,44 @@ Errors are written to stderr:
 Exit codes: `0` success, `2` configuration/authentication, `3` validation,
 `4` upstream contract failure, `5` transport failure, `1` unknown failure.
 
+## Programmatic API (`@hiq-ai/hiq-editor/api`)
+
+For hosts that run many users' work inside one long-lived process (Cortex's
+cloud expert worker), spawning the CLI per call is the wrong shape: the CLI
+reads its credential from the environment once and caches one identity per
+process. The library entry gives each caller its own client instead.
+
+```ts
+import { createEditorClient, EditorClientError } from "@hiq-ai/hiq-editor/api";
+
+const editor = createEditorClient({
+  token: delegatedSsoToken,          // SSO access token or a Cortex delegation JWT; or `apiKey`
+  signal: caseAbortSignal,           // optional: cancels every request of this client
+  requestTimeoutMs: 60_000,          // optional (default 60s); importTimeoutMs defaults to 210s
+});
+
+const preflight = await editor.uprPreflight({ file_path, datasource: "GBA", product_category_code: "3421" });
+const imported = await editor.uprImport({ file_path, datasource: "GBA", product_category_code: "3421" }, { signal, timeoutMs });
+await editor.processTrialCalculate(imported.data.process_id as string);
+```
+
+Guarantees, in contrast to the CLI:
+
+- **No environment, no login store.** The credential is the argument. `HIQ_EDITOR_*` variables are ignored.
+- **One client = one identity.** SSO identity is resolved lazily once per client and never shared across clients, so a
+  multi-tenant host can hold many clients side by side.
+- **Cancellation everywhere.** Every method takes `{ signal, timeoutMs }`; the client-level `signal` aborts all in-flight
+  requests (including the identity lookup) at once. Aborts and timeouts surface as `EditorClientError` of kind `transport`.
+- **Same contract as the CLI.** `execute(name, input)` / `catalog()` use the same nine command names and zod schemas as
+  `hiq-editor call` / `hiq-editor list --json`; results are the same `{ text, data }`; errors are the same
+  `EditorClientError` kinds and codes the CLI maps to exit codes (`config`=2, `validation`=3, `upstream`=4, `transport`=5).
+
+Typed methods: `datasourcesList`, `processesList`, `processShow`, `flowsSearch`, `productCategoriesSearch`,
+`uprPreflight`, `uprImport`, `processTrialCalculate`, `processSubmitReview`, plus `identity()`.
+
 ## MCP adapter
 
-`hiq-editor-mcp` is an optional local adapter. It exposes the same eight command
+`hiq-editor-mcp` is an optional local adapter. It exposes the same nine command
 schemas and calls the same local implementations. It does not connect to the
 remote `/mcp/editor` endpoint and cannot expose arbitrary server tools.
 

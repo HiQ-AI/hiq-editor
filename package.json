@@ -1,6 +1,6 @@
 {
   "name": "@hiq-ai/hiq-editor",
-  "version": "0.10.3",
+  "version": "0.11.0",
   "description": "HiQ LCA dataset editor client — an agent-oriented CLI over the native Editor API, with an optional stdio MCP adapter.",
   "license": "Apache-2.0",
   "type": "module",
@@ -16,6 +16,10 @@
     "./commands": {
       "import": "./dist/commands.js",
       "types": "./dist/commands.d.ts"
+    },
+    "./api": {
+      "import": "./dist/api.js",
+      "types": "./dist/api.d.ts"
     },
     "./package.json": "./package.json"
   },

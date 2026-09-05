@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import ExcelJS from "exceljs";
-import { resetIdentityCache, unwrapSsoToken } from "../src/apiClient.js";
-import { commandCatalog, executeCommand } from "../src/commands.js";
+import { createEditorTransport, unwrapSsoToken } from "../src/apiClient.js";
+import { commandCatalog, executeCommand, resetIdentityCache } from "../src/commands.js";
 import { config } from "../src/config.js";
 import { ensureDataItems } from "../src/dataItems.js";
 import { inspectUprWorkbook } from "../src/workbook.js";
@@ -42,6 +42,11 @@ function sso(): Response {
 function testCredential(kind: "access-token" | "api-key" = "access-token"): void {
   config.credential = { kind, value: "opaque-credential", source: "env" };
   resetIdentityCache();
+}
+
+/** dataItems 现在按 transport 调;测试用与 CLI 同配置的一份。 */
+function testTransport() {
+  return createEditorTransport({ apiUrl: config.apiUrl, ssoUserInfoUrl: config.ssoUserInfoUrl, credential: { kind: "access-token", value: "opaque-credential" } });
 }
 
 function compatibleReferenceProperty(): Response {
@@ -336,7 +341,7 @@ test("data-item preflight reuses existing rows and creates each missing normaliz
     throw new Error(`unexpected ${url}`);
   });
   try {
-    const result = await ensureDataItems([" 新物料 ", "已有物料", "新物料"]);
+    const result = await ensureDataItems(testTransport(), [" 新物料 ", "已有物料", "新物料"]);
     assert.deepEqual(new Set(result.map((item) => item.name)), new Set(["已有物料", "新物料"]));
     assert.deepEqual(creates, ["新物料"]);
     assert.equal(result.find((item) => item.name === "已有物料")?.created, false);
@@ -361,7 +366,7 @@ test("data-item preflight accepts a concurrent creator only after exact readback
     throw new Error(`unexpected ${url} ${String(init.body)}`);
   });
   try {
-    assert.deepEqual(await ensureDataItems(["并发物料"]), [{ id: "element-winner", name: "并发物料", created: false }]);
+    assert.deepEqual(await ensureDataItems(testTransport(), ["并发物料"]), [{ id: "element-winner", name: "并发物料", created: false }]);
   } finally {
     restore();
   }
@@ -377,7 +382,7 @@ test("data-item preflight fails closed on duplicate exact identities", async () 
     throw new Error(`unexpected ${url}`);
   });
   try {
-    await assert.rejects(() => ensureDataItems(["重复物料"]), /is not unique/);
+    await assert.rejects(() => ensureDataItems(testTransport(), ["重复物料"]), /is not unique/);
   } finally {
     restore();
   }
